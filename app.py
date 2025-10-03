@@ -6,10 +6,10 @@ st.title("🔐 Validación de Endpoints VTEX")
 # =========================
 # Inputs de usuario
 # =========================
-ACCOUNT_NAME = st.text_input("Cuenta VTEX", value="ferrenovo")
+ACCOUNT_NAME = st.text_input("Cuenta VTEX")
 VTEX_APP_KEY = st.text_input("App Key")
 VTEX_APP_TOKEN = st.text_input("App Token")
-SALES_CHANNEL = st.text_input("Sales Channel", value="Ferrenovo")
+SALES_CHANNEL = st.text_input("Sales Channel")
 
 # =========================
 # Headers
