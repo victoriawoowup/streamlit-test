@@ -100,14 +100,14 @@ def validar_clientes():
     except Exception as e:
         st.error(f"❌ EXCEPCIÓN en API de Clientes: {e}")
 
-def validar_precios(reference_id):
+def validar_precios(product_id):
     st.subheader("4️⃣ Precios")
-    if not reference_id:
+    if not product_id:
         st.warning("⚠️ SALTEADO - No hay referenceId disponible")
         return
     headers = get_vtex_headers_alt()
     headers['Accept'] = 'application/vnd.vtex.ds.v10+json'  # igual al curl
-    url = f'https://{ACCOUNT_NAME}.vtexcommercestable.com.br/api/pricing/prices/{reference_id}'
+    url = f'https://{ACCOUNT_NAME}.vtexcommercestable.com.br/api/pricing/prices/{product_id}'
 
     try:
         resp = requests.get(url, headers=headers, timeout=10)
@@ -164,8 +164,8 @@ if st.button("💡 Validar Endpoints VTEX"):
     validar_ventas()
     product_id, reference_id = validar_productos()
     validar_clientes()
-    st.write(reference_id)
-    validar_precios(reference_id)
+    st.write(product_id)
+    validar_precios(product_id)
     validar_categorias()
     validar_simulador(product_id)
     st.success("🎉 Validación completada")
