@@ -105,7 +105,7 @@ def validar_precios(reference_id):
         st.warning("⚠️ SALTEADO - No hay referenceId disponible")
         return
     headers = get_vtex_headers_alt()
-    url = f'https://vta.vtexcommercestable.com.br/api/pricing/prices/{reference_id}'
+    url = f'https://{ACCOUNT_NAME}.vtexcommercestable.com.br/api/pricing/prices/{reference_id}'
 
     try:
         resp = requests.get(url, headers=headers, timeout=10)
@@ -121,7 +121,7 @@ def validar_categorias():
     st.subheader("5️⃣ Categorías")
     headers = get_vtex_headers_alt()
     headers['REST-Range'] = 'resources=0-10'
-    url = f'https://vta.vtexcommercestable.com.br/api/catalog_system/pub/category/tree/10'
+    url = f'https://{ACCOUNT_NAME}.vtexcommercestable.com.br/api/catalog_system/pub/category/tree/10'
 
     try:
         resp = requests.get(url, headers=headers, timeout=10)
@@ -139,7 +139,7 @@ def validar_simulador(product_id):
         st.warning("⚠️ SALTEADO - No hay productId disponible")
         return
     headers = get_vtex_headers_alt()
-    url = f'https://vta.vtexcommercestable.com.br/api/checkout/pvt/orderForms/simulation'
+    url = f'https://{ACCOUNT_NAME}.vtexcommercestable.com.br/api/checkout/pvt/orderForms/simulation'
     payload = {"items": [{"id": product_id, "quantity": 1, "seller": SALES_CHANNEL}]}
 
     try:
