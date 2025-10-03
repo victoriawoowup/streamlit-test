@@ -1,16 +1,19 @@
-# VALIDAR ENDPOINTS VTEX COMPLETO
+import streamlit as st
 import requests
 
-# ---------- CONFIGURACIÓN ----------
-ACCOUNT_NAME = 'ferrenovo'
-VTEX_APP_KEY = 'vtexappkey-moreproducts-FZNBFT'
-VTEX_APP_TOKEN = 'KQVRITWBIWWNUJRQCMOYUWEQSCRRTGHRXZKCIAOGJJXPAOJDCHDCTZXTRJAPZGSYVPKGOTHBCSSOUCTDNHTPLZEGFBYHWSEEXTDSPLFJKJZZAYMBXBJJPZZPDXBWIDQK'
+st.title("🔐 Validación de Endpoints VTEX")
 
-# Credenciales alternativas para algunos endpoints
-VTEX_APP_KEY_ALT = VTEX_APP_KEY
-VTEX_APP_TOKEN_ALT = VTEX_APP_TOKEN
-# -----------------------------------
+# =========================
+# Inputs de usuario
+# =========================
+ACCOUNT_NAME = st.text_input("Cuenta VTEX", value="ferrenovo")
+VTEX_APP_KEY = st.text_input("App Key")
+VTEX_APP_TOKEN = st.text_input("App Token")
+SALES_CHANNEL = st.text_input("Sales Channel", value="Ferrenovo")
 
+# =========================
+# Headers
+# =========================
 def get_vtex_headers():
     return {
         'x-vtex-api-appKey': VTEX_APP_KEY,
@@ -20,152 +23,160 @@ def get_vtex_headers():
     }
 
 def get_vtex_headers_alt():
-    return {
-        'x-vtex-api-appKey': VTEX_APP_KEY_ALT,
-        'x-vtex-api-appToken': VTEX_APP_TOKEN_ALT,
-        'Accept': 'application/json',
-        'Content-Type': 'application/json',
-    }
+    headers = get_vtex_headers()
+    headers['Accept'] = 'application/vnd.vtex.ds.v10+json'
+    return headers
 
-# -------- VALIDACIONES --------
-
+# =========================
+# Funciones de validación
+# =========================
 def validar_ventas():
-    print("\n1️⃣  VALIDANDO ACCESO A VENTAS")
-    print("-"*60)
+    st.subheader("1️⃣ Ventas")
     headers = get_vtex_headers()
     url = f'https://{ACCOUNT_NAME}.vtexcommercestable.com.br/api/oms/pvt/orders'
-    params = {'per_page': 1, 'page': 1}
+
+    params = {
+        'orderBy': 'creationDate,desc',
+        'f_status': 'ready-for-handling,handling,invoiced',
+        'f_salesChannel': SALES_CHANNEL,
+        'page': 0,
+        'per_page': 100
+    }
+
     try:
         resp = requests.get(url, headers=headers, params=params, timeout=10)
         if resp.status_code == 200:
-            print("✅ ACCESO EXITOSO a API de Ventas")
+            st.success("✅ ACCESO EXITOSO a API de Ventas")
             data = resp.json()
             orders = data.get("list", []) or data.get("orders", [])
-            print(f"   Se encontraron órdenes: {len(orders) > 0}")
+            st.write(f"Se encontraron órdenes: {len(orders)}")
+            for order in orders[:5]:  # mostramos solo primeras 5
+                st.write(f"- Orden {order.get('orderId', 'N/A')}: {order.get('salesChannel', 'N/A')}")
         else:
-            print(f"❌ ERROR en API de Ventas - Status: {resp.status_code}")
+            st.error(f"❌ ERROR en API de Ventas - Status: {resp.status_code}")
+            st.write(resp.text[:200])
     except Exception as e:
-        print(f"❌ EXCEPCIÓN en API de Ventas: {e}")
+        st.error(f"❌ EXCEPCIÓN en API de Ventas: {e}")
 
 def validar_productos():
-    print("\n2️⃣  VALIDANDO ACCESO A PRODUCTOS")
-    print("-"*60)
+    st.subheader("2️⃣ Productos")
     headers = get_vtex_headers()
     url = f'https://{ACCOUNT_NAME}.vtexcommercestable.com.br/api/catalog_system/pub/products/search?_from=0&_to=5'
+
     try:
         resp = requests.get(url, headers=headers, timeout=10)
         if resp.status_code in [200, 206]:
-            print("✅ ACCESO EXITOSO a API de Productos")
+            st.success("✅ ACCESO EXITOSO a API de Productos")
             products = resp.json()
+            product_id = reference_id = None
             for product in products:
                 prod_id = product.get('productId')
                 ref = product.get('productReference')
                 if prod_id and ref:
-                    print(f"   Primer productId encontrado: {prod_id}")
-                    print(f"   Primer referenceId encontrado: {ref}")
-                    return prod_id, ref
-            print("⚠️  No se encontró productId o referenceId")
+                    product_id = prod_id
+                    reference_id = ref
+                    st.write(f"- Primer productId: {product_id}, referenceId: {reference_id}")
+                    break
+            if not product_id:
+                st.warning("⚠️ No se encontró productId o referenceId")
+            return product_id, reference_id
         else:
-            print(f"❌ ERROR en API de Productos - Status: {resp.status_code}")
+            st.error(f"❌ ERROR en API de Productos - Status: {resp.status_code}")
+            st.write(resp.text[:200])
+            return None, None
     except Exception as e:
-        print(f"❌ EXCEPCIÓN en API de Productos: {e}")
-    return None, None
+        st.error(f"❌ EXCEPCIÓN en API de Productos: {e}")
+        return None, None
 
 def validar_clientes():
-    print("\n3️⃣  VALIDANDO ACCESO A CLIENTES")
-    print("-"*60)
+    st.subheader("3️⃣ Clientes")
     headers = get_vtex_headers()
     url = f'https://{ACCOUNT_NAME}.vtexcommercestable.com.br/api/dataentities/CL/scroll'
     params = {'_fields': 'email,firstName', '_where': 'email is not null'}
+
     try:
         resp = requests.get(url, headers=headers, params=params, timeout=10)
         if resp.status_code == 200:
-            print("✅ ACCESO EXITOSO a API de Clientes")
+            st.success("✅ ACCESO EXITOSO a API de Clientes")
             clients = resp.json()
-            print(f"   Clientes encontrados en primera página: {len(clients)}")
+            st.write(f"Clientes encontrados en primera página: {len(clients) if isinstance(clients, list) else 0}")
         else:
-            print(f"❌ ERROR en API de Clientes - Status: {resp.status_code}")
+            st.error(f"❌ ERROR en API de Clientes - Status: {resp.status_code}")
+            st.write(resp.text[:200])
     except Exception as e:
-        print(f"❌ EXCEPCIÓN en API de Clientes: {e}")
+        st.error(f"❌ EXCEPCIÓN en API de Clientes: {e}")
 
 def validar_precios(reference_id):
-    print("\n4️⃣  VALIDANDO ACCESO A PRECIOS")
-    print("-"*60)
+    st.subheader("4️⃣ Precios")
     if not reference_id:
-        print("⚠️  SALTEADO - No hay referenceId disponible")
+        st.warning("⚠️ SALTEADO - No hay referenceId disponible")
         return
     headers = get_vtex_headers_alt()
-    headers['Accept'] = 'application/vnd.vtex.ds.v10+json'
     url = f'https://vta.vtexcommercestable.com.br/api/pricing/prices/{reference_id}'
+
     try:
         resp = requests.get(url, headers=headers, timeout=10)
         if resp.status_code == 200:
-            print("✅ ACCESO EXITOSO a API de Precios")
+            st.success("✅ ACCESO EXITOSO a API de Precios")
             price_data = resp.json()
-            print(f"   Base price: {price_data.get('basePrice','N/A')}")
-            print(f"   List price: {price_data.get('listPrice','N/A')}")
+            st.write(f"ReferenceId: {reference_id}")
+            st.write(f"Precio base: {price_data.get('basePrice', 'N/A')}, Precio lista: {price_data.get('listPrice', 'N/A')}")
         else:
-            print(f"❌ ERROR en API de Precios - Status: {resp.status_code}")
+            st.error(f"❌ ERROR en API de Precios - Status: {resp.status_code}")
+            st.write(resp.text[:200])
     except Exception as e:
-        print(f"❌ EXCEPCIÓN en API de Precios: {e}")
+        st.error(f"❌ EXCEPCIÓN en API de Precios: {e}")
 
 def validar_categorias():
-    print("\n5️⃣  VALIDANDO ACCESO A CATEGORÍAS")
-    print("-"*60)
+    st.subheader("5️⃣ Categorías")
     headers = get_vtex_headers_alt()
-    headers['Accept'] = 'application/vnd.vtex.ds.v10+json'
     headers['REST-Range'] = 'resources=0-10'
     url = f'https://vta.vtexcommercestable.com.br/api/catalog_system/pub/category/tree/10'
+
     try:
         resp = requests.get(url, headers=headers, timeout=10)
         if resp.status_code == 200:
+            st.success("✅ ACCESO EXITOSO a API de Categorías")
             categories = resp.json()
-            print(f"✅ ACCESO EXITOSO a API de Categorías")
-            print(f"   Categorías raíz encontradas: {len(categories)}")
+            st.write(f"Categorías raíz encontradas: {len(categories) if isinstance(categories, list) else 0}")
         else:
-            print(f"❌ ERROR en API de Categorías - Status: {resp.status_code}")
+            st.error(f"❌ ERROR en API de Categorías - Status: {resp.status_code}")
+            st.write(resp.text[:200])
     except Exception as e:
-        print(f"❌ EXCEPCIÓN en API de Categorías: {e}")
+        st.error(f"❌ EXCEPCIÓN en API de Categorías: {e}")
 
 def validar_simulador(product_id):
-    print("\n6️⃣  VALIDANDO ACCESO A SIMULADOR")
-    print("-"*60)
+    st.subheader("6️⃣ Simulador")
     if not product_id:
-        print("⚠️  SALTEADO - No hay productId disponible")
+        st.warning("⚠️ SALTEADO - No hay productId disponible")
         return
     headers = get_vtex_headers_alt()
     url = f'https://vta.vtexcommercestable.com.br/api/checkout/pvt/orderForms/simulation'
-    payload = {"items":[{"id": product_id,"quantity": 1,"seller": "1"}]}
+    payload = {"items": [{"id": product_id, "quantity": 1, "seller": "1"}]}
+
     try:
         resp = requests.post(url, headers=headers, json=payload, timeout=10)
         if resp.status_code == 200:
-            print("✅ ACCESO EXITOSO a API de Simulador")
+            st.success("✅ ACCESO EXITOSO a API de Simulador")
             sim_data = resp.json()
-            total_value = sim_data.get('totals',[{}])[0].get('value','N/A') if sim_data.get('totals') else 'N/A'
-            print(f"   Valor total simulación: {total_value}")
+            total_value = sim_data.get('totals', [{}])[0].get('value', 'N/A') if sim_data.get('totals') else 'N/A'
+            st.write(f"ProductId simulado: {product_id}, Valor total: {total_value}")
         else:
-            print(f"❌ ERROR en API de Simulador - Status: {resp.status_code}")
+            st.error(f"❌ ERROR en API de Simulador - Status: {resp.status_code}")
+            st.write(resp.text[:200])
     except Exception as e:
-        print(f"❌ EXCEPCIÓN en API de Simulador: {e}")
+        st.error(f"❌ EXCEPCIÓN en API de Simulador: {e}")
 
-# ========== EJECUCIÓN PRINCIPAL ==========
-if __name__ == "__main__":
-    print("="*60)
-    print("🔐 SCRIPT DE VALIDACIÓN DE ACCESOS VTEX COMPLETO")
-    print("="*60)
-    
-    product_id, reference_id = None, None
-
-    # Validar Ventas, Productos y Clientes
+# =========================
+# Botón de ejecución
+# =========================
+if st.button("💡 Validar Endpoints VTEX"):
     validar_ventas()
     product_id, reference_id = validar_productos()
     validar_clientes()
-
-    # Validar Precios, Categorías y Simulador
     validar_precios(reference_id)
     validar_categorias()
     validar_simulador(product_id)
+    st.success("🎉 Validación completada")
 
-    print("\n" + "="*60)
-    print("✅ VALIDACIÓN COMPLETADA")
-    print("="*60)
+
