@@ -40,18 +40,13 @@ def validar_ventas():
         'f_status': 'ready-for-handling,handling,invoiced',
         'f_salesChannel': SALES_CHANNEL,
         'page': 0,
-        'per_page': 100
+        'per_page': 1  # solo para validar acceso
     }
 
     try:
         resp = requests.get(url, headers=headers, params=params, timeout=10)
         if resp.status_code == 200:
             st.success("✅ ACCESO EXITOSO a API de Ventas")
-            data = resp.json()
-            orders = data.get("list", []) or data.get("orders", [])
-            st.write(f"Se encontraron órdenes: {len(orders)}")
-            for order in orders[:5]:  # mostramos solo primeras 5
-                st.write(f"- Orden {order.get('orderId', 'N/A')}: {order.get('salesChannel', 'N/A')}")
         else:
             st.error(f"❌ ERROR en API de Ventas - Status: {resp.status_code}")
             st.write(resp.text[:200])
@@ -98,8 +93,6 @@ def validar_clientes():
         resp = requests.get(url, headers=headers, params=params, timeout=10)
         if resp.status_code == 200:
             st.success("✅ ACCESO EXITOSO a API de Clientes")
-            clients = resp.json()
-            st.write(f"Clientes encontrados en primera página: {len(clients) if isinstance(clients, list) else 0}")
         else:
             st.error(f"❌ ERROR en API de Clientes - Status: {resp.status_code}")
             st.write(resp.text[:200])
@@ -118,9 +111,6 @@ def validar_precios(reference_id):
         resp = requests.get(url, headers=headers, timeout=10)
         if resp.status_code == 200:
             st.success("✅ ACCESO EXITOSO a API de Precios")
-            price_data = resp.json()
-            st.write(f"ReferenceId: {reference_id}")
-            st.write(f"Precio base: {price_data.get('basePrice', 'N/A')}, Precio lista: {price_data.get('listPrice', 'N/A')}")
         else:
             st.error(f"❌ ERROR en API de Precios - Status: {resp.status_code}")
             st.write(resp.text[:200])
@@ -137,8 +127,6 @@ def validar_categorias():
         resp = requests.get(url, headers=headers, timeout=10)
         if resp.status_code == 200:
             st.success("✅ ACCESO EXITOSO a API de Categorías")
-            categories = resp.json()
-            st.write(f"Categorías raíz encontradas: {len(categories) if isinstance(categories, list) else 0}")
         else:
             st.error(f"❌ ERROR en API de Categorías - Status: {resp.status_code}")
             st.write(resp.text[:200])
@@ -152,15 +140,12 @@ def validar_simulador(product_id):
         return
     headers = get_vtex_headers_alt()
     url = f'https://vta.vtexcommercestable.com.br/api/checkout/pvt/orderForms/simulation'
-    payload = {"items": [{"id": product_id, "quantity": 1, "seller": "1"}]}
+    payload = {"items": [{"id": product_id, "quantity": 1, "seller": SALES_CHANNEL}]}
 
     try:
         resp = requests.post(url, headers=headers, json=payload, timeout=10)
         if resp.status_code == 200:
             st.success("✅ ACCESO EXITOSO a API de Simulador")
-            sim_data = resp.json()
-            total_value = sim_data.get('totals', [{}])[0].get('value', 'N/A') if sim_data.get('totals') else 'N/A'
-            st.write(f"ProductId simulado: {product_id}, Valor total: {total_value}")
         else:
             st.error(f"❌ ERROR en API de Simulador - Status: {resp.status_code}")
             st.write(resp.text[:200])
@@ -178,5 +163,6 @@ if st.button("💡 Validar Endpoints VTEX"):
     validar_categorias()
     validar_simulador(product_id)
     st.success("🎉 Validación completada")
+
 
 
