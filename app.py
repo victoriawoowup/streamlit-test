@@ -164,6 +164,7 @@ if st.button("💡 Validar Endpoints VTEX"):
     validar_ventas()
     product_id, reference_id = validar_productos()
     validar_clientes()
+    st.write(reference_id)
     validar_precios(reference_id)
     validar_categorias()
     validar_simulador(product_id)
