@@ -106,17 +106,21 @@ def validar_precios(reference_id):
         st.warning("⚠️ SALTEADO - No hay referenceId disponible")
         return
     headers = get_vtex_headers_alt()
+    headers['Accept'] = 'application/vnd.vtex.ds.v10+json'  # igual al curl
     url = f'https://{ACCOUNT_NAME}.vtexcommercestable.com.br/api/pricing/prices/{reference_id}'
 
     try:
         resp = requests.get(url, headers=headers, timeout=10)
         if resp.status_code == 200:
             st.success("✅ ACCESO EXITOSO a API de Precios")
+            st.json(resp.json())  # mostramos la respuesta completa para inspección
         else:
             st.error(f"❌ ERROR en API de Precios - Status: {resp.status_code}")
-            st.write(resp.text[:200])
+            st.write("Respuesta completa del servidor:")
+            st.text(resp.text)
     except Exception as e:
         st.error(f"❌ EXCEPCIÓN en API de Precios: {e}")
+
 
 def validar_categorias():
     st.subheader("5️⃣ Categorías")
