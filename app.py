@@ -34,13 +34,12 @@ def validar_ventas():
     st.subheader("1️⃣ Ventas")
     headers = get_vtex_headers()
     url = f'https://{ACCOUNT_NAME}.vtexcommercestable.com.br/api/oms/pvt/orders'
-
     params = {
         'orderBy': 'creationDate,desc',
         'f_status': 'ready-for-handling,handling,invoiced',
         'f_salesChannel': SALES_CHANNEL,
         'page': 0,
-        'per_page': 1  # solo para validar acceso
+        'per_page': 1  # solo validar acceso
     }
 
     try:
@@ -85,9 +84,11 @@ def validar_productos():
 
 def validar_clientes():
     st.subheader("3️⃣ Clientes")
-    headers = get_vtex_headers()
-    url = f'https://{ACCOUNT_NAME}.vtexcommercestable.com.br/api/dataentities/CL/scroll'
-    params = {'_fields': 'email,firstName', '_where': 'email is not null'}
+    headers = get_vtex_headers_alt()
+    url = f'https://{ACCOUNT_NAME}.vtexcommercestable.com.br/api/dataentities/CL/search'
+    params = {
+        '_fields': '_all'
+    }
 
     try:
         resp = requests.get(url, headers=headers, params=params, timeout=10)
@@ -163,6 +164,3 @@ if st.button("💡 Validar Endpoints VTEX"):
     validar_categorias()
     validar_simulador(product_id)
     st.success("🎉 Validación completada")
-
-
-
