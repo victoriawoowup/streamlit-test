@@ -7,13 +7,10 @@ from datetime import datetime
 
 st.set_page_config(page_title="VTEX Validator", page_icon="🔐", layout="wide")
 
-
-# Logo WOOWUP (usando URL directa)
-st.markdown("""
-    <div style="text-align: center;">
-        <img src="https://woowup.com/wp-content/uploads/2023/03/logo-woowup.png" width="300">
-    </div>
-    """, unsafe_allow_html=True)
+# Logo WOOWUP centrado
+col1, col2, col3 = st.columns([1, 2, 1])
+with col2:
+    st.image("woowup_logo.png", width=200)
 st.title("🔐 Validación de Endpoints VTEX")
 st.markdown("---")
 
