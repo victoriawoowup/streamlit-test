@@ -158,50 +158,6 @@ def validar_simulador(product_id):
     except Exception as e:
         st.error(f"❌ EXCEPCIÓN en API de Simulador: {e}")
 
-# ---------- CONFIGURACIÓN CLIENTES ----------
-FECHA_CLIENTES_DESDE = '2023-09-01'
-FECHA_CLIENTES_HASTA = '2025-09-29'
-CAMPOS_CLIENTES = ['document', 'email', 'firstName', 'lastName', 'birthdate', 'homePhone', 'gender', 'isNewsletterOptIn']
-
-def fetch_clientes_scroll(account_name, fecha_desde, fecha_hasta, campos):
-    headers = get_vtex_headers()
-    base_url = f'https://{account_name}.vtexcommercestable.com.br/api/dataentities/CL/scroll'
-    
-    where_clause = f'createdIn between {fecha_desde} AND {fecha_hasta}'
-    fields_param = ','.join(campos)
-    
-    all_clients = []
-    token = None
-    
-    while True:
-        params = {
-            '_where': where_clause,
-            '_fields': fields_param
-        }
-        if token:
-            params['_token'] = token
-        
-        resp = requests.get(base_url, headers=headers, params=params)
-        
-        if resp.status_code != 200:
-            st.error(f"❌ Error en API de Clientes - Status: {resp.status_code}")
-            return []
-        
-        token = resp.headers.get('X-VTEX-MD-TOKEN')
-        clients = resp.json()
-        
-        if not clients or len(clients) == 0:
-            break
-        
-        all_clients.extend(clients)
-        
-        if not token:
-            break
-        
-        time.sleep(0.2)
-    
-    return all_clients
-
 # =========================
 # Botón de ejecución
 # =========================
@@ -214,23 +170,203 @@ if st.button("💡 Validar Endpoints VTEX"):
     validar_simulador(product_id)
     st.success("🎉 Validación completada")
 
-# --------- Botón para continuar ---------
-if st.button("➡️ Continuar validación"):
-    st.subheader("2️⃣ Validación de Entidades")
+# ---------------------------------------------------------------------------------
+# SEGUNDO BLOQUE: VALIDACIÓN DE ENTIDADES
+# ---------------------------------------------------------------------------------
+st.markdown("---")
+st.header("➡️ Continuar validación")
+
+# Configuración clientes
+FECHA_CLIENTES_DESDE = '2023-09-01'
+FECHA_CLIENTES_HASTA = '2025-09-30'
+OUTPUT_CSV_CLIENTES = "clientes_vtex_prueba.csv"
+CAMPOS_CLIENTES = [
+    'document', 'email', 'firstName', 'lastName',
+    'birthdate', 'homePhone', 'gender', 'isNewsletterOptIn'
+]
+
+def fetch_clientes_scroll(account_name, fecha_desde, fecha_hasta, campos):
+    headers = get_vtex_headers()
+    base_url = f'https://{account_name}.vtexcommercestable.com.br/api/dataentities/CL/scroll'
+    where_clause = f'createdIn between {fecha_desde} AND {fecha_hasta}'
+    fields_param = ','.join(campos)
+
+    all_clients = []
+    token = None
+
+    while True:
+        params = {'_where': where_clause, '_fields': fields_param}
+        if token:
+            params['_token'] = token
+
+        resp = requests.get(base_url, headers=headers, params=params)
+
+        if resp.status_code != 200:
+            st.error(f"❌ Error en clientes: {resp.status_code} - {resp.text}")
+            break
+
+        token = resp.headers.get('X-VTEX-MD-TOKEN')
+        clients = resp.json()
+
+        if not clients:
+            break
+
+        all_clients.extend(clients)
+
+        if not token:
+            break
+
+        time.sleep(0.2)
+
+    return all_clients
+
+def export_clientes_to_csv(clientes, output_file, campos):
+    if not clientes:
+        return None
     
-    # --- CLIENTES ---
-    st.markdown("### 👥 Validación de Clientes")
-    with st.spinner("Consultando API de clientes..."):
+    with open(output_file, mode="w", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+        writer.writerow(campos)  # header
+        for cliente in clientes:
+            row = []
+            for campo in campos:
+                valor = cliente.get(campo, "")
+                if valor is None:
+                    valor = ""
+                row.append(valor)
+            writer.writerow(row)
+    return output_file
+
+# Botón para validar clientes
+st.subheader("👥 Validar Clientes")
+if st.button("Validar clientes"):
+    with st.spinner("Descargando clientes de VTEX..."):
         clientes = fetch_clientes_scroll(
-            ACCOUNT_NAME,
-            FECHA_CLIENTES_DESDE,
-            FECHA_CLIENTES_HASTA,
+            ACCOUNT_NAME, 
+            FECHA_CLIENTES_DESDE, 
+            FECHA_CLIENTES_HASTA, 
             CAMPOS_CLIENTES
         )
-    
+
     if clientes:
-        st.success(f"✅ Clientes recuperados: {len(clientes)}")
-        st.write("📋 Muestra de clientes:")
-        st.dataframe(clientes[:5])  # mostramos los primeros 5
+        st.success(f"✅ Total de clientes recuperados: {len(clientes)}")
+
+        # Guardar CSV
+        csv_file = export_clientes_to_csv(clientes, OUTPUT_CSV_CLIENTES, CAMPOS_CLIENTES)
+        if csv_file:
+            with open(csv_file, "rb") as f:
+                st.download_button(
+                    label="💾 Descargar CSV de Clientes",
+                    data=f,
+                    file_name=csv_file,
+                    mime="text/csv"
+                )
+
+        # Mostrar muestra
+        st.write("📋 Muestra de 5 clientes:")
+        st.dataframe(clientes[:5])
     else:
         st.error("⚠️ No se recuperaron clientes.")
+
+st.markdown("---")
+st.header("💡 Continuar Validación")
+
+# =========================
+# Inputs de usuario para fechas
+# =========================
+st.subheader("📅 Validación de Clientes")
+fecha_desde = st.date_input("Fecha desde")
+fecha_hasta = st.date_input("Fecha hasta")
+OUTPUT_CSV_CLIENTES = "clientes_vtex.csv"
+CAMPOS_CLIENTES = ['document', 'email', 'firstName', 'lastName', 'birthdate', 'homePhone', 'gender', 'isNewsletterOptIn']
+
+# =========================
+# Funciones
+# =========================
+def fetch_clientes_scroll(account_name, fecha_desde, fecha_hasta, campos):
+    """
+    Obtiene clientes usando el endpoint de Master Data (scroll)
+    """
+    headers = get_vtex_headers()
+    base_url = f'https://{account_name}.vtexcommercestable.com.br/api/dataentities/CL/scroll'
+
+    where_clause = f'createdIn between {fecha_desde} AND {fecha_hasta}'
+    fields_param = ','.join(campos)
+
+    all_clients = []
+    token = None
+    page_count = 0
+
+    while True:
+        page_count += 1
+        params = {
+            '_where': where_clause,
+            '_fields': fields_param
+        }
+        if token:
+            params['_token'] = token
+
+        try:
+            resp = requests.get(base_url, headers=headers, params=params, timeout=10)
+            if resp.status_code != 200:
+                st.error(f"❌ Error en página {page_count}: {resp.status_code}")
+                break
+
+            token = resp.headers.get('X-VTEX-MD-TOKEN')
+            clients = resp.json()
+
+            if not clients:
+                break
+
+            all_clients.extend(clients)
+
+            if not token:
+                break
+
+        except Exception as e:
+            st.error(f"❌ Error procesando página {page_count}: {e}")
+            break
+
+    return all_clients
+
+def export_clientes_to_csv(clientes, output_file, campos):
+    """
+    Exporta clientes a CSV
+    """
+    import csv
+    if not clientes:
+        st.warning("⚠️ No hay clientes para exportar")
+        return
+
+    with open(output_file, mode="w", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+        writer.writerow(campos)
+        for cliente in clientes:
+            row = [cliente.get(c, "") if cliente.get(c) is not None else "" for c in campos]
+            writer.writerow(row)
+    st.success(f"💾 CSV de clientes generado: {output_file}")
+    st.download_button("📥 Descargar CSV de Clientes", data=open(output_file, "rb"), file_name=output_file)
+
+def mostrar_muestra_clientes(clientes, n=5):
+    """
+    Muestra los primeros N clientes
+    """
+    if not clientes:
+        st.warning("⚠️ No hay clientes para mostrar")
+        return
+
+    st.write(f"👤 Mostrando los primeros {min(n,len(clientes))} clientes:")
+    for i, cliente in enumerate(clientes[:n]):
+        st.write(f"{i+1}. {cliente.get('email','N/A')} | {cliente.get('firstName','')} {cliente.get('lastName','')} | {cliente.get('document','N/A')} | {cliente.get('homePhone','')} | {cliente.get('gender','')} | Newsletter: {cliente.get('isNewsletterOptIn','N/A')}")
+
+# =========================
+# Botón para ejecutar
+# =========================
+if st.button("✅ Validar Clientes"):
+    st.info("Consultando API de clientes...")
+    clientes = fetch_clientes_scroll(ACCOUNT_NAME, fecha_desde, fecha_hasta, CAMPOS_CLIENTES)
+    if clientes:
+        export_clientes_to_csv(clientes, OUTPUT_CSV_CLIENTES, CAMPOS_CLIENTES)
+        mostrar_muestra_clientes(clientes, 5)
+    else:
+        st.warning("⚠️ No se recuperaron clientes.")
