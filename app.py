@@ -176,7 +176,6 @@ if st.button("💡 Validar Endpoints VTEX"):
 # ---------------------------------------------------------------------------------
 # SEGUNDO BLOQUE: VALIDACIÓN DE ENTIDADES
 # ---------------------------------------------------------------------------------
-
 st.markdown("---")
 st.subheader("➡️ Continuar Validación")
 
@@ -218,9 +217,6 @@ if st.button("✅ Validar Clientes"):
     token = None
     page_count = 0
 
-    # Placeholder para progreso en la misma línea
-    progreso_placeholder = st.empty()
-
     while True:
         page_count += 1
         if token:
@@ -240,8 +236,7 @@ if st.button("✅ Validar Clientes"):
                 break
 
             clientes.extend(data)
-            # Mostrar progreso en la misma línea
-            progreso_placeholder.text(f"Página {page_count}: {len(data)} clientes procesados (Total: {len(clientes)})")
+            st.write(f"\rPágina {page_count}: {len(data)} clientes procesados (Total: {len(clientes)})", end="")
 
             if not token:
                 st.success("✅ Se procesaron todas las páginas.")
@@ -252,17 +247,22 @@ if st.button("✅ Validar Clientes"):
             break
 
     if clientes:
-        # Mostrar primeros 5 clientes
-        st.markdown("#### 👀 Muestra de los primeros 5 clientes")
-        df_muestra = pd.DataFrame(clientes[:5])
-        st.dataframe(df_muestra)
+        # Definir los campos que queremos mostrar/exportar
+        campos_clientes = ['document', 'email', 'firstName', 'lastName', 'birthdate', 
+                           'homePhone', 'gender', 'isNewsletterOptIn', 'updatedIn']
 
-        # Campos que queremos exportar al CSV
-        campos_clientes = ['document', 'email', 'firstName', 'lastName', 'birthdate', 'homePhone', 'gender', 'isNewsletterOptIn', 'updatedIn']
+        # Crear DataFrame
+        df = pd.DataFrame(clientes)
+
+        # Filtrar solo campos existentes
+        campos_existentes = [c for c in campos_clientes if c in df.columns]
+        df = df[campos_existentes]
+
+        # Mostrar primeros 5 clientes con solo los campos deseados
+        st.markdown("#### 👀 Muestra de los primeros 5 clientes")
+        st.dataframe(df.head(5))
 
         # Preparar CSV para descarga
-        df = pd.DataFrame(clientes)
-        df = df[campos_clientes]  # Solo los campos deseados
         csv_buffer = io.StringIO()
         df.to_csv(csv_buffer, index=False, encoding='utf-8')
         csv_bytes = csv_buffer.getvalue().encode('utf-8')
@@ -275,3 +275,4 @@ if st.button("✅ Validar Clientes"):
         )
     else:
         st.warning("⚠️ No se recuperaron clientes para las fechas indicadas.")
+
