@@ -3,6 +3,8 @@ import requests
 import time
 import csv
 import pandas as pd
+import io
+from datetime import datetime
 
 st.title("🔐 Validación de Endpoints VTEX")
 
@@ -175,77 +177,92 @@ if st.button("💡 Validar Endpoints VTEX"):
 # SEGUNDO BLOQUE: VALIDACIÓN DE ENTIDADES
 # ---------------------------------------------------------------------------------
 st.markdown("---")
-st.header("➡️ Continuar Validación")
+st.subheader("➡️ Continuar Validación")
 
 # =========================
-# Validación de Clientes
+# Inputs de usuario para clientes
 # =========================
-st.subheader("👥 Validación de Clientes")
+st.markdown("### 👥 Validar Clientes")
+fecha_desde = st.date_input("Fecha mínima de actualización (updatedIn) desde", value=datetime(2023, 1, 1))
+fecha_hasta = st.date_input("Fecha máxima de actualización (updatedIn) hasta", value=datetime.today())
 
-# Input de fecha mínima
-updated_in_desde = st.date_input(
-    "Fecha mínima de actualización (updatedIn)",
-    value=pd.to_datetime("2025-01-01")
-)
+# Botón para ejecutar validación
+if st.button("✅ Validar Clientes"):
 
-OUTPUT_CSV_CLIENTES = "clientes_vtex.csv"
+    st.info("Consultando API de clientes...")
 
-def fetch_clientes_scroll(account_name, updated_min, headers):
-    """
-    Descarga masiva de clientes usando el endpoint /scroll de VTEX
-    """
-    url = f'https://{account_name}.vtexcommercestable.com.br/api/dataentities/CL/scroll'
-    where_clause = f"(updatedIn>{updated_min}T00:00:00.000Z) OR ((updatedIn is null) AND (createdIn>{updated_min}T00:00:00.000Z))"
-    fields_param = "_all"
-    all_clients = []
+    # Convertir fechas a ISO 8601 UTC para VTEX
+    fecha_desde_iso = fecha_desde.strftime("%Y-%m-%dT00:00:00.000Z")
+    fecha_hasta_iso = fecha_hasta.strftime("%Y-%m-%dT23:59:59.999Z")
+
+    # Headers con credenciales que ya tenés en tu app
+    headers = {
+        'x-vtex-api-appKey': VTEX_APP_KEY,
+        'x-vtex-api-appToken': VTEX_APP_TOKEN,
+        'Accept': 'application/vnd.vtex.ds.v10+json',
+        'Content-Type': 'application/json',
+        'REST-Range': 'resources=0-100'
+    }
+
+    # URL de scroll histórico de clientes
+    url = f'https://{ACCOUNT_NAME}.vtexcommercestable.com.br/api/dataentities/CL/scroll'
+
+    # Parámetros para VTEX
+    params = {
+        '_fields': '_all',
+        '_where': f"(updatedIn>{fecha_desde_iso}) OR ((updatedIn is null) AND (createdIn>{fecha_desde_iso}))"
+    }
+
+    clientes = []
     token = None
     page_count = 0
 
     while True:
         page_count += 1
-        params = {'_where': where_clause, '_fields': fields_param}
         if token:
             params['_token'] = token
+        try:
+            resp = requests.get(url, headers=headers, params=params, timeout=10)
+            if resp.status_code != 200:
+                st.error(f"❌ Error en página {page_count}: {resp.status_code}")
+                break
 
-        resp = requests.get(url, headers={**headers, "REST-Range": "resources=0-100"}, params=params, timeout=15)
-        
-        if resp.status_code != 200:
-            st.error(f"❌ ERROR en página {page_count}: {resp.status_code}")
+            # Obtener token de la siguiente página
+            token = resp.headers.get('X-VTEX-MD-TOKEN')
+
+            data = resp.json()
+            if not data or len(data) == 0:
+                st.success("✅ No hay más clientes para procesar.")
+                break
+
+            clientes.extend(data)
+            st.write(f"Página {page_count}: {len(data)} clientes procesados (Total: {len(clientes)})")
+
+            if not token:
+                st.success("✅ Se procesaron todas las páginas.")
+                break
+
+        except Exception as e:
+            st.error(f"❌ Excepción en página {page_count}: {e}")
             break
 
-        clients = resp.json()
-        all_clients.extend(clients)
+    if clientes:
+        # Mostrar primeros 5 clientes
+        st.markdown("#### 👀 Muestra de los primeros 5 clientes")
+        df_muestra = pd.DataFrame(clientes[:5])
+        st.dataframe(df_muestra)
 
-        token = resp.headers.get("X-VTEX-MD-TOKEN")
-        if not token or not clients:
-            break
+        # Preparar CSV para descarga
+        df = pd.DataFrame(clientes)
+        csv_buffer = io.StringIO()
+        df.to_csv(csv_buffer, index=False, encoding='utf-8')
+        csv_bytes = csv_buffer.getvalue().encode('utf-8')
 
-    return all_clients
-
-def export_clientes_to_csv(clientes, output_file):
-    if not clientes:
-        st.warning("⚠️ No hay clientes para exportar")
-        return
-    # Usar todos los campos de la primera fila para el CSV
-    campos = list(clientes[0].keys())
-    with open(output_file, "w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=campos)
-        writer.writeheader()
-        for c in clientes:
-            writer.writerow({k: c.get(k, "") for k in campos})
-    st.success(f"💾 CSV de clientes generado: {output_file} (Total registros: {len(clientes)})")
-
-def mostrar_muestra_clientes(clientes, n=5):
-    if not clientes:
-        st.warning("⚠️ No hay clientes para mostrar")
-        return
-    st.markdown(f"Mostrando los primeros {min(n,len(clientes))} clientes:")
-    for i, c in enumerate(clientes[:n]):
-        st.write(f"{i+1}. {c.get('email','N/A')} - {c.get('firstName','')} {c.get('lastName','')} - updatedIn: {c.get('updatedIn','N/A')}")
-
-# Botón para ejecutar validación de clientes
-if st.button("✅ Validar Clientes"):
-    st.info("Consultando API de clientes...")
-    clientes = fetch_clientes_scroll(ACCOUNT_NAME, updated_in_desde.strftime("%Y-%m-%d"), get_vtex_headers())
-    export_clientes_to_csv(clientes, OUTPUT_CSV_CLIENTES)
-    mostrar_muestra_clientes(clientes, 5)
+        st.download_button(
+            label="📥 Descargar CSV de Clientes",
+            data=csv_bytes,
+            file_name="clientes_vtex.csv",
+            mime="text/csv"
+        )
+    else:
+        st.warning("⚠️ No se recuperaron clientes para las fechas indicadas.")
