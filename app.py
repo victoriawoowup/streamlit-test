@@ -1,5 +1,7 @@
 import streamlit as st
 import requests
+import time
+import csv
 
 st.title("🔐 Validación de Endpoints VTEX")
 
@@ -156,6 +158,50 @@ def validar_simulador(product_id):
     except Exception as e:
         st.error(f"❌ EXCEPCIÓN en API de Simulador: {e}")
 
+# ---------- CONFIGURACIÓN CLIENTES ----------
+FECHA_CLIENTES_DESDE = '2023-09-01'
+FECHA_CLIENTES_HASTA = '2025-09-29'
+CAMPOS_CLIENTES = ['document', 'email', 'firstName', 'lastName', 'birthdate', 'homePhone', 'gender', 'isNewsletterOptIn']
+
+def fetch_clientes_scroll(account_name, fecha_desde, fecha_hasta, campos):
+    headers = get_vtex_headers()
+    base_url = f'https://{account_name}.vtexcommercestable.com.br/api/dataentities/CL/scroll'
+    
+    where_clause = f'createdIn between {fecha_desde} AND {fecha_hasta}'
+    fields_param = ','.join(campos)
+    
+    all_clients = []
+    token = None
+    
+    while True:
+        params = {
+            '_where': where_clause,
+            '_fields': fields_param
+        }
+        if token:
+            params['_token'] = token
+        
+        resp = requests.get(base_url, headers=headers, params=params)
+        
+        if resp.status_code != 200:
+            st.error(f"❌ Error en API de Clientes - Status: {resp.status_code}")
+            return []
+        
+        token = resp.headers.get('X-VTEX-MD-TOKEN')
+        clients = resp.json()
+        
+        if not clients or len(clients) == 0:
+            break
+        
+        all_clients.extend(clients)
+        
+        if not token:
+            break
+        
+        time.sleep(0.2)
+    
+    return all_clients
+
 # =========================
 # Botón de ejecución
 # =========================
@@ -167,3 +213,24 @@ if st.button("💡 Validar Endpoints VTEX"):
     validar_categorias()
     validar_simulador(product_id)
     st.success("🎉 Validación completada")
+
+# --------- Botón para continuar ---------
+if st.button("➡️ Continuar validación"):
+    st.subheader("2️⃣ Validación de Entidades")
+    
+    # --- CLIENTES ---
+    st.markdown("### 👥 Validación de Clientes")
+    with st.spinner("Consultando API de clientes..."):
+        clientes = fetch_clientes_scroll(
+            ACCOUNT_NAME,
+            FECHA_CLIENTES_DESDE,
+            FECHA_CLIENTES_HASTA,
+            CAMPOS_CLIENTES
+        )
+    
+    if clientes:
+        st.success(f"✅ Clientes recuperados: {len(clientes)}")
+        st.write("📋 Muestra de clientes:")
+        st.dataframe(clientes[:5])  # mostramos los primeros 5
+    else:
+        st.error("⚠️ No se recuperaron clientes.")
