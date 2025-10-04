@@ -8,7 +8,7 @@ from datetime import datetime
 st.set_page_config(page_title="VTEX Validator", page_icon="🔐", layout="wide")
 
 # Logo WOOWUP centrado
-col1, col2, col3 = st.columns([1, 2, 1])
+col1, col2, col3 = st.columns([2, 1, 2])
 with col2:
     st.image("woowup_logo.png", width=200)
 st.title("🔐 Validación de Endpoints VTEX")
