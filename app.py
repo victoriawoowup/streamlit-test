@@ -176,6 +176,7 @@ if st.button("💡 Validar Endpoints VTEX"):
 # ---------------------------------------------------------------------------------
 # SEGUNDO BLOQUE: VALIDACIÓN DE ENTIDADES
 # ---------------------------------------------------------------------------------
+
 st.markdown("---")
 st.subheader("➡️ Continuar Validación")
 
@@ -217,6 +218,9 @@ if st.button("✅ Validar Clientes"):
     token = None
     page_count = 0
 
+    # Placeholder para progreso en la misma línea
+    progreso_placeholder = st.empty()
+
     while True:
         page_count += 1
         if token:
@@ -236,7 +240,8 @@ if st.button("✅ Validar Clientes"):
                 break
 
             clientes.extend(data)
-            st.write(f"Página {page_count}: {len(data)} clientes procesados (Total: {len(clientes)})")
+            # Mostrar progreso en la misma línea
+            progreso_placeholder.text(f"Página {page_count}: {len(data)} clientes procesados (Total: {len(clientes)})")
 
             if not token:
                 st.success("✅ Se procesaron todas las páginas.")
@@ -252,8 +257,12 @@ if st.button("✅ Validar Clientes"):
         df_muestra = pd.DataFrame(clientes[:5])
         st.dataframe(df_muestra)
 
+        # Campos que queremos exportar al CSV
+        campos_clientes = ['document', 'email', 'firstName', 'lastName', 'birthdate', 'homePhone', 'gender', 'isNewsletterOptIn', 'updatedIn']
+
         # Preparar CSV para descarga
         df = pd.DataFrame(clientes)
+        df = df[campos_clientes]  # Solo los campos deseados
         csv_buffer = io.StringIO()
         df.to_csv(csv_buffer, index=False, encoding='utf-8')
         csv_bytes = csv_buffer.getvalue().encode('utf-8')
