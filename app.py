@@ -7,6 +7,8 @@ from datetime import datetime
 
 st.set_page_config(page_title="VTEX Validator", page_icon="🔐", layout="wide")
 
+# Logo WOOWUP
+st.image("woowup_logo.png", width=300)
 st.title("🔐 Validación de Endpoints VTEX")
 st.markdown("---")
 
@@ -293,11 +295,8 @@ with col2:
         help="Fecha máxima de actualización de clientes"
     )
 
-# Configuración avanzada
-with st.expander("⚙️ Configuración Avanzada"):
-    max_pages = st.number_input("Límite de páginas", min_value=1, max_value=1000, value=100, 
-                                 help="Número máximo de páginas a procesar (seguridad)")
-    registros_por_pagina = st.selectbox("Registros por página", [100, 200, 500], index=0)
+# Configuración fija
+registros_por_pagina = 100  # Estándar de VTEX
 
 campos_clientes = ['document', 'email', 'firstName', 'lastName', 'birthdate', 
                    'homePhone', 'gender', 'isNewsletterOptIn', 'updatedIn']
@@ -333,12 +332,11 @@ if st.button("📥 Extraer Clientes", type="primary", use_container_width=True):
     page_count = 0
 
     # Barra de progreso
-    progress_bar = st.progress(0)
     progress_text = st.empty()
     info_text = st.empty()
 
     with st.spinner('🔄 Extrayendo clientes de VTEX...'):
-        while page_count < max_pages:
+        while True:  # Sin límite - recorre hasta que no haya más datos
             page_count += 1
             if token:
                 params['_token'] = token
@@ -363,9 +361,7 @@ if st.button("📥 Extraer Clientes", type="primary", use_container_width=True):
                 clientes.extend(data)
                 
                 # Actualizar progreso
-                progress_pct = min(page_count / max_pages, 1.0)
-                progress_bar.progress(progress_pct)
-                progress_text.text(f"📄 Página {page_count}/{max_pages}")
+                progress_text.text(f"📄 Página {page_count}")
                 info_text.info(f"✅ {len(data)} clientes en esta página | Total acumulado: {len(clientes)}")
 
                 if not token:
@@ -382,10 +378,6 @@ if st.button("📥 Extraer Clientes", type="primary", use_container_width=True):
             except Exception as e:
                 st.error(f"❌ Excepción en página {page_count}: {str(e)}")
                 break
-
-        # Verificar si se alcanzó el límite
-        if page_count >= max_pages:
-            st.warning(f"⚠️ Se alcanzó el límite de {max_pages} páginas. Puede haber más datos disponibles.")
 
     # Procesar resultados
     if clientes:
@@ -406,17 +398,17 @@ if st.button("📥 Extraer Clientes", type="primary", use_container_width=True):
             st.metric("Emails Válidos", emails_validos)
 
         # Mostrar muestra
-        st.markdown("#### 👀 Muestra de los primeros 10 clientes")
-        st.dataframe(df.head(10), use_container_width=True)
+        st.markdown("#### 👀 Muestra de los primeros 5 clientes")
+        st.dataframe(df.head(5), use_container_width=True)
 
         # Preparar CSV para descarga
         csv_buffer = io.StringIO()
-        df.to_csv(csv_buffer, index=False, encoding='utf-8-sig')  # UTF-8 con BOM para Excel
-        csv_bytes = csv_buffer.getvalue().encode('utf-8-sig')
+        df.to_csv(csv_buffer, index=False, encoding='utf-8')
+        csv_data = csv_buffer.getvalue()
 
         st.download_button(
             label="📥 Descargar CSV Completo de Clientes",
-            data=csv_bytes,
+            data=csv_data,
             file_name=f"clientes_vtex_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
             mime="text/csv",
             use_container_width=True
