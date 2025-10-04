@@ -186,6 +186,8 @@ st.markdown("### 👥 Validar Clientes")
 fecha_desde = st.date_input("Fecha mínima de actualización (updatedIn) desde", value=datetime(2023, 1, 1))
 fecha_hasta = st.date_input("Fecha máxima de actualización (updatedIn) hasta", value=datetime.today())
 
+campos_clientes = ['document', 'email', 'firstName', 'lastName', 'birthdate', 'homePhone', 'gender', 'isNewsletterOptIn', 'updatedIn']
+
 # Botón para ejecutar validación
 if st.button("✅ Validar Clientes"):
 
@@ -195,7 +197,7 @@ if st.button("✅ Validar Clientes"):
     fecha_desde_iso = fecha_desde.strftime("%Y-%m-%dT00:00:00.000Z")
     fecha_hasta_iso = fecha_hasta.strftime("%Y-%m-%dT23:59:59.999Z")
 
-    # Headers con credenciales que ya tenés en tu app
+    # Headers con credenciales ya definidas
     headers = {
         'x-vtex-api-appKey': VTEX_APP_KEY,
         'x-vtex-api-appToken': VTEX_APP_TOKEN,
@@ -210,12 +212,14 @@ if st.button("✅ Validar Clientes"):
     # Parámetros para VTEX
     params = {
         '_fields': '_all',
-        '_where': f"(updatedIn>{fecha_desde_iso}) OR ((updatedIn is null) AND (createdIn>{fecha_desde_iso}))"
+        '_where': f"(updatedIn>{fecha_desde_iso} AND updatedIn<{fecha_hasta_iso}) OR ((updatedIn is null) AND (createdIn>{fecha_desde_iso} AND createdIn<{fecha_hasta_iso}))"
     }
 
     clientes = []
     token = None
     page_count = 0
+
+    progress_text = st.empty()  # Para actualizar en la misma línea
 
     while True:
         page_count += 1
@@ -227,7 +231,7 @@ if st.button("✅ Validar Clientes"):
                 st.error(f"❌ Error en página {page_count}: {resp.status_code}")
                 break
 
-            # Obtener token de la siguiente página
+            # Token para siguiente página
             token = resp.headers.get('X-VTEX-MD-TOKEN')
 
             data = resp.json()
@@ -236,7 +240,7 @@ if st.button("✅ Validar Clientes"):
                 break
 
             clientes.extend(data)
-            st.write(f"\rPágina {page_count}: {len(data)} clientes procesados (Total: {len(clientes)})", end="")
+            progress_text.text(f"Página {page_count}: {len(data)} clientes procesados (Total: {len(clientes)})")
 
             if not token:
                 st.success("✅ Se procesaron todas las páginas.")
@@ -247,18 +251,11 @@ if st.button("✅ Validar Clientes"):
             break
 
     if clientes:
-        # Definir los campos que queremos mostrar/exportar
-        campos_clientes = ['document', 'email', 'firstName', 'lastName', 'birthdate', 
-                           'homePhone', 'gender', 'isNewsletterOptIn', 'updatedIn']
-
-        # Crear DataFrame
+        # Filtrar solo los campos que queremos
         df = pd.DataFrame(clientes)
+        df = df.reindex(columns=campos_clientes)
 
-        # Filtrar solo campos existentes
-        campos_existentes = [c for c in campos_clientes if c in df.columns]
-        df = df[campos_existentes]
-
-        # Mostrar primeros 5 clientes con solo los campos deseados
+        # Mostrar primeros 5 clientes
         st.markdown("#### 👀 Muestra de los primeros 5 clientes")
         st.dataframe(df.head(5))
 
@@ -275,4 +272,3 @@ if st.button("✅ Validar Clientes"):
         )
     else:
         st.warning("⚠️ No se recuperaron clientes para las fechas indicadas.")
-
