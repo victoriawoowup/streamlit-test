@@ -422,12 +422,21 @@ if st.button("📥 Extraer Clientes", type="primary", use_container_width=True):
 st.markdown("---")
 st.markdown("🔐 **VTEX Endpoint Validator** | Desarrollado con Streamlit")
 
+
 # ---------------------------------------------------------------------------------
 # TERCER BLOQUE: EXTRACCIÓN DE PRODUCTOS
 # ---------------------------------------------------------------------------------
 st.markdown("---")
 st.markdown("---")
 st.header("📦 Extracción de Productos")
+
+# Inicializar session state para productos
+if 'productos_data' not in st.session_state:
+    st.session_state.productos_data = None
+if 'df_productos' not in st.session_state:
+    st.session_state.df_productos = None
+if 'df_atributos' not in st.session_state:
+    st.session_state.df_atributos = None
 
 st.markdown("### ⚙️ Configuración de Extracción")
 
@@ -603,8 +612,8 @@ if st.button("📥 Extraer Productos", type="primary", use_container_width=True)
                         description[:500], brand, category_id, category_name, available_qty
                     ] + attr_values)
         
-        # Crear DataFrame de productos
-        df_productos = pd.DataFrame(
+        # Crear DataFrames y guardar en session_state
+        st.session_state.df_productos = pd.DataFrame(
             productos_rows,
             columns=['productId','productReference','skuId','skuName','productName',
                     'description','brand','categoryId','categoryName','availableQuantity'] + attr_headers
@@ -623,48 +632,56 @@ if st.button("📥 Extraer Productos", type="primary", use_container_width=True)
                 "valores_ejemplo": ", ".join(list(valores)[:10])
             })
         
-        df_atributos = pd.DataFrame(atributos_info)
-        
-        # Mostrar resultados
-        st.success(f"🎉 Extracción completada: {len(productos)} productos | {len(productos_rows)} SKUs")
-        
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            st.metric("Total Productos", len(productos))
-        with col2:
-            st.metric("Total SKUs", len(productos_rows))
-        with col3:
-            st.metric("Atributos", len(all_attributes))
-        
-        # Mostrar muestra de productos
-        st.markdown("#### 👀 Muestra de los primeros 5 productos")
-        st.dataframe(df_productos.head(5), use_container_width=True)
-        
-        # Mostrar muestra de atributos
-        st.markdown("#### 🏷️ Muestra de atributos disponibles")
-        st.dataframe(df_atributos.head(10), use_container_width=True)
-        
-        # Descargas
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            csv_productos = df_productos.to_csv(index=False, encoding='utf-8')
-            st.download_button(
-                label="📥 Descargar CSV de Productos",
-                data=csv_productos,
-                file_name=f"productos_vtex_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
-                mime="text/csv",
-                use_container_width=True
-            )
-        
-        with col2:
-            csv_atributos = df_atributos.to_csv(index=False, encoding='utf-8')
-            st.download_button(
-                label="📥 Descargar CSV de Atributos",
-                data=csv_atributos,
-                file_name=f"atributos_vtex_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
-                mime="text/csv",
-                use_container_width=True
-            )
-    else:
-        st.warning("⚠️ No se recuperaron productos")
+        st.session_state.df_atributos = pd.DataFrame(atributos_info)
+        st.session_state.productos_data = {
+            'total_productos': len(productos),
+            'total_skus': len(productos_rows),
+            'total_atributos': len(all_attributes)
+        }
+
+# Mostrar resultados si existen datos en session_state
+if st.session_state.df_productos is not None:
+    data = st.session_state.productos_data
+    df_productos = st.session_state.df_productos
+    df_atributos = st.session_state.df_atributos
+    
+    st.success(f"🎉 Extracción completada: {data['total_productos']} productos | {data['total_skus']} SKUs")
+    
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.metric("Total Productos", data['total_productos'])
+    with col2:
+        st.metric("Total SKUs", data['total_skus'])
+    with col3:
+        st.metric("Atributos", data['total_atributos'])
+    
+    # Mostrar muestra de productos
+    st.markdown("#### 👀 Muestra de los primeros 5 productos")
+    st.dataframe(df_productos.head(5), use_container_width=True)
+    
+    # Mostrar muestra de atributos
+    st.markdown("#### 🏷️ Muestra de atributos disponibles")
+    st.dataframe(df_atributos.head(10), use_container_width=True)
+    
+    # Descargas - AHORA PERSISTEN
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        csv_productos = df_productos.to_csv(index=False, encoding='utf-8')
+        st.download_button(
+            label="📥 Descargar CSV de Productos",
+            data=csv_productos,
+            file_name=f"productos_vtex_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+            mime="text/csv",
+            use_container_width=True
+        )
+    
+    with col2:
+        csv_atributos = df_atributos.to_csv(index=False, encoding='utf-8')
+        st.download_button(
+            label="📥 Descargar CSV de Atributos",
+            data=csv_atributos,
+            file_name=f"atributos_vtex_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+            mime="text/csv",
+            use_container_width=True
+        )
