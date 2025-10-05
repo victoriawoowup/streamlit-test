@@ -421,3 +421,250 @@ if st.button("📥 Extraer Clientes", type="primary", use_container_width=True):
 # Footer
 st.markdown("---")
 st.markdown("🔐 **VTEX Endpoint Validator** | Desarrollado con Streamlit")
+
+# ---------------------------------------------------------------------------------
+# TERCER BLOQUE: EXTRACCIÓN DE PRODUCTOS
+# ---------------------------------------------------------------------------------
+st.markdown("---")
+st.markdown("---")
+st.header("📦 Extracción de Productos")
+
+st.markdown("### ⚙️ Configuración de Extracción")
+
+# Configuración fija para productos
+productos_por_pagina = 50
+
+if st.button("📥 Extraer Productos", type="primary", use_container_width=True):
+    validar_credenciales()
+    
+    st.info("🔄 Paso 1/3: Obteniendo árbol de categorías...")
+    
+    # Headers para productos
+    headers_productos = get_vtex_headers()
+    headers_productos['Accept'] = 'application/vnd.vtex.ds.v10+json'
+    headers_productos['REST-Range'] = 'resources=0-10'
+    
+    # ===== FETCH CATEGORÍAS =====
+    category_map = {}
+    url_categorias = f'https://{ACCOUNT_NAME}.vtexcommercestable.com.br/api/catalog_system/pub/category/tree/10'
+    
+    try:
+        resp_cat = requests.get(url_categorias, headers=headers_productos, timeout=30)
+        if resp_cat.status_code == 200:
+            tree = resp_cat.json()
+            
+            def extract_categories(nodes, parent_path=""):
+                for node in nodes:
+                    cat_id = node.get('id')
+                    cat_name = node.get('name')
+                    full_path = f"{parent_path} > {cat_name}" if parent_path else cat_name
+                    if cat_id:
+                        category_map[cat_id] = full_path
+                    children = node.get('children', [])
+                    if children:
+                        extract_categories(children, full_path)
+            
+            extract_categories(tree)
+            st.success(f"✅ {len(category_map)} categorías cargadas")
+        else:
+            st.warning("⚠️ No se pudieron cargar categorías")
+    except Exception as e:
+        st.error(f"❌ Error cargando categorías: {e}")
+    
+    time.sleep(0.3)
+    
+    # ===== FETCH PRODUCTOS =====
+    st.info("🔄 Paso 2/3: Extrayendo productos...")
+    
+    productos = []
+    from_index = 0
+    page_count = 0
+    
+    progress_text_prod = st.empty()
+    info_text_prod = st.empty()
+    
+    with st.spinner('📦 Extrayendo productos de VTEX...'):
+        while True:
+            page_count += 1
+            to_index = from_index + productos_por_pagina - 1
+            
+            url_productos = f'https://{ACCOUNT_NAME}.vtexcommercestable.com.br/api/catalog_system/pub/products/search?_from={from_index}&_to={to_index}'
+            
+            try:
+                resp_prod = requests.get(url_productos, headers=headers_productos, timeout=30)
+                
+                if resp_prod.status_code not in [200, 206]:
+                    st.error(f"❌ Error en página {page_count}: Status {resp_prod.status_code}")
+                    break
+                
+                products_page = resp_prod.json()
+                
+                if not products_page or len(products_page) == 0:
+                    info_text_prod.success("✅ No hay más productos para procesar")
+                    break
+                
+                productos.extend(products_page)
+                
+                progress_text_prod.text(f"📄 Página {page_count}")
+                info_text_prod.info(f"✅ {len(products_page)} productos en esta página | Total acumulado: {len(productos)}")
+                
+                # Si obtuvo menos productos que el límite, terminó
+                if len(products_page) < productos_por_pagina:
+                    info_text_prod.success("✅ Se procesaron todos los productos disponibles")
+                    break
+                
+                from_index = to_index + 1
+                time.sleep(0.5)  # Rate limiting
+                
+            except requests.exceptions.Timeout:
+                st.error(f"⏱️ Timeout en página {page_count}. Reintentando...")
+                time.sleep(2)
+                continue
+            except Exception as e:
+                st.error(f"❌ Excepción en página {page_count}: {str(e)}")
+                break
+    
+    # ===== PROCESAR Y EXPORTAR =====
+    if productos:
+        st.info("🔄 Paso 3/3: Procesando datos y generando CSVs...")
+        
+        # Extraer atributos de todos los productos
+        all_attributes = set()
+        for producto in productos:
+            atributos = {}
+            all_specs = producto.get("allSpecifications", [])
+            for spec in all_specs:
+                valores = producto.get(spec, [])
+                if isinstance(valores, list):
+                    atributos[spec] = valores
+                else:
+                    atributos[spec] = [valores]
+            
+            if producto.get("complementName"):
+                atributos["nombreComplementario"] = [producto.get("complementName")]
+            if producto.get("productClusters"):
+                atributos["colecciones"] = list(producto["productClusters"].values())
+            
+            producto["_atributos"] = atributos
+            all_attributes.update(atributos.keys())
+        
+        # Generar CSV de productos
+        attr_headers = [f"atributo.{a}" for a in sorted(all_attributes)]
+        
+        productos_rows = []
+        for producto in productos:
+            product_id = producto.get('productId', 'N/A')
+            product_name = producto.get('productName', 'N/A')
+            product_reference = producto.get('productReference', 'N/A')
+            brand = producto.get('brand', 'N/A')
+            category_id = producto.get('categoryId', 'N/A')
+            description = producto.get('description', '') or producto.get('metaTagDescription', 'N/A')
+            category_name = category_map.get(int(category_id), 'N/A') if category_id != 'N/A' else 'N/A'
+            
+            atributos = producto.get("_atributos", {})
+            
+            # Procesar SKUs
+            items = producto.get('items', [])
+            if not items:
+                attr_values = []
+                for a in sorted(all_attributes):
+                    val = atributos.get(a, [])
+                    if isinstance(val, list):
+                        attr_values.append(", ".join(str(v) for v in val))
+                    else:
+                        attr_values.append(str(val))
+                
+                productos_rows.append([
+                    product_id, product_reference, 'N/A', 'N/A', product_name,
+                    description[:500], brand, category_id, category_name, 0
+                ] + attr_values)
+            else:
+                for item in items:
+                    sku_id = item.get('itemId', 'N/A')
+                    sku_name = item.get('name', 'N/A')
+                    available_qty = 0
+                    
+                    for seller in item.get('sellers', []):
+                        offer = seller.get('commertialOffer', {}) or seller.get('commercialOffer', {})
+                        qty = offer.get('AvailableQuantity', 0)
+                        if isinstance(qty, (int, float)):
+                            available_qty += qty
+                    
+                    attr_values = []
+                    for a in sorted(all_attributes):
+                        val = atributos.get(a, [])
+                        if isinstance(val, list):
+                            attr_values.append(", ".join(str(v) for v in val))
+                        else:
+                            attr_values.append(str(val))
+                    
+                    productos_rows.append([
+                        product_id, product_reference, sku_id, sku_name, product_name,
+                        description[:500], brand, category_id, category_name, available_qty
+                    ] + attr_values)
+        
+        # Crear DataFrame de productos
+        df_productos = pd.DataFrame(
+            productos_rows,
+            columns=['productId','productReference','skuId','skuName','productName',
+                    'description','brand','categoryId','categoryName','availableQuantity'] + attr_headers
+        )
+        
+        # Crear DataFrame de atributos
+        atributos_info = []
+        for a in sorted(all_attributes):
+            valores = set()
+            for p in productos:
+                vals = p.get("_atributos", {}).get(a, [])
+                if vals:
+                    valores.update(str(v) for v in vals)
+            atributos_info.append({
+                "atributo": f"atributo.{a}",
+                "valores_ejemplo": ", ".join(list(valores)[:10])
+            })
+        
+        df_atributos = pd.DataFrame(atributos_info)
+        
+        # Mostrar resultados
+        st.success(f"🎉 Extracción completada: {len(productos)} productos | {len(productos_rows)} SKUs")
+        
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.metric("Total Productos", len(productos))
+        with col2:
+            st.metric("Total SKUs", len(productos_rows))
+        with col3:
+            st.metric("Atributos", len(all_attributes))
+        
+        # Mostrar muestra de productos
+        st.markdown("#### 👀 Muestra de los primeros 5 productos")
+        st.dataframe(df_productos.head(5), use_container_width=True)
+        
+        # Mostrar muestra de atributos
+        st.markdown("#### 🏷️ Muestra de atributos disponibles")
+        st.dataframe(df_atributos.head(10), use_container_width=True)
+        
+        # Descargas
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            csv_productos = df_productos.to_csv(index=False, encoding='utf-8')
+            st.download_button(
+                label="📥 Descargar CSV de Productos",
+                data=csv_productos,
+                file_name=f"productos_vtex_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                mime="text/csv",
+                use_container_width=True
+            )
+        
+        with col2:
+            csv_atributos = df_atributos.to_csv(index=False, encoding='utf-8')
+            st.download_button(
+                label="📥 Descargar CSV de Atributos",
+                data=csv_atributos,
+                file_name=f"atributos_vtex_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                mime="text/csv",
+                use_container_width=True
+            )
+    else:
+        st.warning("⚠️ No se recuperaron productos")
