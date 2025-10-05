@@ -5,6 +5,42 @@ import pandas as pd
 import io
 from datetime import datetime
 
+# ========================= ESTILOS CSS =========================
+st.markdown("""
+<style>
+    /* Ajustar tamaño de títulos */
+    h1 {
+        font-size: 2rem !important;
+        font-weight: 600 !important;
+    }
+    h2 {
+        font-size: 1.5rem !important;
+        font-weight: 600 !important;
+    }
+    h3 {
+        font-size: 1.2rem !important;
+        font-weight: 500 !important;
+    }
+    
+    /* Mejorar botones */
+    .stButton button {
+        border-radius: 8px;
+        font-weight: 500;
+    }
+    
+    /* Mejorar inputs */
+    .stTextInput input {
+        border-radius: 6px;
+    }
+    
+    /* Espaciado más compacto */
+    .block-container {
+        padding-top: 2rem;
+        padding-bottom: 2rem;
+    }
+</style>
+""", unsafe_allow_html=True)
+
 st.set_page_config(page_title="VTEX Validator", page_icon="🔐", layout="wide")
 
 # Logo WOOWUP centrado
