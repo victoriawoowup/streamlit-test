@@ -685,3 +685,240 @@ if st.session_state.df_productos is not None:
             mime="text/csv",
             use_container_width=True
         )
+
+
+# ---------------------------------------------------------------------------------
+# CUARTO BLOQUE: EXTRACCIÓN DE VENTAS
+# ---------------------------------------------------------------------------------
+st.markdown("---")
+st.markdown("---")
+st.header("💰 Extracción de Ventas")
+
+# Inicializar session state para ventas
+if 'ventas_data' not in st.session_state:
+    st.session_state.ventas_data = None
+if 'df_ventas' not in st.session_state:
+    st.session_state.df_ventas = None
+
+st.markdown("### 📅 Rango de Fechas")
+
+col1, col2 = st.columns(2)
+
+with col1:
+    fecha_desde_ventas = st.date_input(
+        "📅 Fecha desde (creationDate)", 
+        value=datetime(2025, 1, 1),
+        help="Fecha mínima de creación de órdenes",
+        key="ventas_desde"
+    )
+
+with col2:
+    fecha_hasta_ventas = st.date_input(
+        "📅 Fecha hasta (creationDate)", 
+        value=datetime.today(),
+        help="Fecha máxima de creación de órdenes",
+        key="ventas_hasta"
+    )
+
+# Configuración de workers para requests concurrentes
+with st.expander("⚙️ Configuración Avanzada"):
+    max_workers = st.slider("Requests concurrentes", min_value=1, max_value=20, value=10, 
+                            help="Cantidad de requests simultáneos para detalles de órdenes")
+
+if st.button("📥 Extraer Ventas", type="primary", use_container_width=True):
+    validar_credenciales()
+    
+    # Convertir fechas a ISO 8601 UTC
+    fecha_desde_iso = fecha_desde_ventas.strftime("%Y-%m-%dT00:00:00.000Z")
+    fecha_hasta_iso = fecha_hasta_ventas.strftime("%Y-%m-%dT23:59:59.999Z")
+    
+    st.info("🔄 Paso 1/2: Extrayendo órdenes...")
+    
+    # Headers
+    headers_ventas = get_vtex_headers()
+    
+    # ===== FETCH ÓRDENES PAGINADAS =====
+    all_orders = []
+    page = 0
+    per_page = 100
+    
+    progress_text_ventas = st.empty()
+    info_text_ventas = st.empty()
+    
+    with st.spinner('💰 Extrayendo órdenes de VTEX...'):
+        while True:
+            url_orders = f"https://{ACCOUNT_NAME}.vtexcommercestable.com.br/api/oms/pvt/orders"
+            params = {
+                "orderBy": "creationDate,asc",
+                "f_status": "ready-for-handling,handling,invoiced",
+                "f_creationDate": f"creationDate:[{fecha_desde_iso} TO {fecha_hasta_iso}]",
+                "f_salesChannel": SALES_CHANNEL,
+                "page": page,
+                "per_page": per_page
+            }
+            
+            try:
+                resp = requests.get(url_orders, headers=headers_ventas, params=params, timeout=30)
+                
+                if resp.status_code != 200:
+                    st.error(f"❌ Error en página {page}: Status {resp.status_code}")
+                    with st.expander("Ver detalle del error"):
+                        st.code(resp.text[:500])
+                    break
+                
+                data = resp.json()
+                orders = data.get("list", [])
+                
+                if not orders:
+                    info_text_ventas.success("✅ No hay más órdenes para procesar")
+                    break
+                
+                all_orders.extend(orders)
+                
+                progress_text_ventas.text(f"📄 Página {page}")
+                info_text_ventas.info(f"✅ {len(orders)} órdenes en esta página | Total acumulado: {len(all_orders)}")
+                
+                if len(orders) < per_page:
+                    info_text_ventas.success("✅ Se procesaron todas las órdenes disponibles")
+                    break
+                
+                page += 1
+                time.sleep(0.3)  # Rate limiting
+                
+            except requests.exceptions.Timeout:
+                st.error(f"⏱️ Timeout en página {page}. Reintentando...")
+                time.sleep(2)
+                continue
+            except Exception as e:
+                st.error(f"❌ Excepción en página {page}: {str(e)}")
+                break
+    
+    # ===== FETCH DETALLES CON CONCURRENCIA =====
+    if all_orders:
+        st.info(f"🔄 Paso 2/2: Obteniendo detalles de {len(all_orders)} órdenes (concurrente)...")
+        
+        detalles = []
+        progress_bar_detalles = st.progress(0)
+        status_text = st.empty()
+        
+        def fetch_order_detail_local(order_id):
+            """Función local para fetch de detalle"""
+            url_detail = f"https://{ACCOUNT_NAME}.vtexcommercestable.com.br/api/oms/pvt/orders/{order_id}"
+            try:
+                resp = requests.get(url_detail, headers=headers_ventas, timeout=20)
+                if resp.status_code == 200:
+                    return resp.json()
+                return None
+            except:
+                return None
+        
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            future_to_order = {
+                executor.submit(fetch_order_detail_local, o.get("orderId")): o 
+                for o in all_orders
+            }
+            
+            completed = 0
+            for future in as_completed(future_to_order):
+                detalle = future.result()
+                if detalle:
+                    detalles.append(detalle)
+                completed += 1
+                
+                # Actualizar progreso
+                progress_pct = completed / len(all_orders)
+                progress_bar_detalles.progress(progress_pct)
+                status_text.text(f"⏳ Procesadas {completed}/{len(all_orders)} órdenes")
+        
+        st.success(f"✅ Detalles obtenidos: {len(detalles)} órdenes")
+        
+        # ===== PROCESAR Y EXPORTAR =====
+        if detalles:
+            st.info("🔄 Procesando datos y generando CSV...")
+            
+            ventas_rows = []
+            
+            for order in detalles:
+                order_id = order.get("orderId", "N/A")
+                status = order.get("status", "N/A")
+                creation = order.get("creationDate", "N/A")
+                sales_channel = order.get("salesChannel", "N/A")
+                total_value = order.get("value", "N/A")
+                
+                client = order.get("clientProfileData", {})
+                client_email = client.get("email", "N/A")
+                client_first = client.get("firstName", "N/A")
+                client_last = client.get("lastName", "N/A")
+                client_doc = client.get("document", "N/A")
+                
+                items = order.get("items", [])
+                
+                if not items:
+                    ventas_rows.append([
+                        order_id, status, creation, sales_channel, total_value,
+                        client_email, client_first, client_last, client_doc,
+                        "N/A", "N/A", "N/A", "N/A"
+                    ])
+                else:
+                    for item in items:
+                        refId = item.get("refId", "N/A")
+                        name = item.get("name", "N/A")
+                        qty = item.get("quantity", "N/A")
+                        price = item.get("price", "N/A")
+                        
+                        ventas_rows.append([
+                            order_id, status, creation, sales_channel, total_value,
+                            client_email, client_first, client_last, client_doc,
+                            refId, name, qty, price
+                        ])
+            
+            # Crear DataFrame y guardar en session_state
+            st.session_state.df_ventas = pd.DataFrame(
+                ventas_rows,
+                columns=[
+                    'orderId', 'status', 'creationDate', 'salesChannel', 'value',
+                    'client_email', 'client_firstName', 'client_lastName', 'client_document',
+                    'item_refId', 'item_name', 'item_quantity', 'item_price'
+                ]
+            )
+            
+            st.session_state.ventas_data = {
+                'total_ordenes': len(detalles),
+                'total_items': len(ventas_rows)
+            }
+        else:
+            st.warning("⚠️ No se obtuvieron detalles de órdenes")
+    else:
+        st.warning("⚠️ No se recuperaron órdenes para el rango de fechas indicado")
+
+# Mostrar resultados si existen datos en session_state
+if st.session_state.df_ventas is not None:
+    data = st.session_state.ventas_data
+    df_ventas = st.session_state.df_ventas
+    
+    st.success(f"🎉 Extracción completada: {data['total_ordenes']} órdenes | {data['total_items']} items")
+    
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.metric("Total Órdenes", data['total_ordenes'])
+    with col2:
+        st.metric("Total Items", data['total_items'])
+    with col3:
+        total_value = df_ventas['value'].astype(float).sum() / 100  # VTEX guarda en centavos
+        st.metric("Valor Total", f"${total_value:,.2f}")
+    
+    # Mostrar muestra
+    st.markdown("#### 👀 Muestra de las primeras 5 ventas")
+    st.dataframe(df_ventas.head(5), use_container_width=True)
+    
+    # Descarga
+    csv_ventas = df_ventas.to_csv(index=False, encoding='utf-8')
+    st.download_button(
+        label="📥 Descargar CSV de Ventas",
+        data=csv_ventas,
+        file_name=f"ventas_vtex_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+        mime="text/csv",
+        use_container_width=True
+    )      
