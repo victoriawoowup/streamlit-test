@@ -5,12 +5,6 @@ import pandas as pd
 import io
 from datetime import datetime
 
-st.set_page_config(
-    page_title="VTEX Validator", 
-    page_icon="woowup_logo.png",  # Cambiá esta línea
-    layout="wide"
-)
-
 # ========================= ESTILOS CSS =========================
 st.markdown("""
 <style>
@@ -47,12 +41,16 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-st.set_page_config(page_title="VTEX Validator", page_icon="🔐", layout="wide")
+st.set_page_config(
+    page_title="VTEX Validator", 
+    page_icon="icono_woowup.png",  # Archivo local
+    layout="wide"
+)
 
 # Logo WOOWUP centrado
-col1, col2, col3 = st.columns([1.5, 1, 1.5])
+col1, col2, col3 = st.columns([2, 1, 2])
 with col2:
-    st.image("woowup_logo.png", use_column_width=True)
+    st.image("woowup_logo.png", use_container_width=True)
 st.title("🔐 Validación de Endpoints VTEX")
 st.markdown("---")
 
