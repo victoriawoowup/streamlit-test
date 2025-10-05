@@ -47,6 +47,8 @@ st.set_page_config(
     layout="wide"
 )
 
+st.markdown("<br>", unsafe_allow_html=True)  # Espacio extra
+
 # Logo WOOWUP centrado
 col1, col2, col3 = st.columns([2, 1, 2])
 with col2:
