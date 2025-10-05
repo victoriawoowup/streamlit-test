@@ -281,6 +281,12 @@ st.markdown("---")
 st.markdown("---")
 st.header("👥 Extracción de Clientes")
 
+# Inicializar session state para clientes
+if 'clientes_data' not in st.session_state:
+    st.session_state.clientes_data = None
+if 'df_clientes' not in st.session_state:
+    st.session_state.df_clientes = None
+
 col1, col2 = st.columns(2)
 
 with col1:
@@ -298,7 +304,7 @@ with col2:
     )
 
 # Configuración fija
-registros_por_pagina = 100  # Estándar de VTEX
+registros_por_pagina = 100
 
 campos_clientes = ['document', 'email', 'firstName', 'lastName', 'birthdate', 
                    'homePhone', 'gender', 'isNewsletterOptIn', 'updatedIn']
@@ -311,7 +317,7 @@ if st.button("📥 Extraer Clientes", type="primary", use_container_width=True):
     fecha_desde_iso = fecha_desde.strftime("%Y-%m-%dT00:00:00.000Z")
     fecha_hasta_iso = fecha_hasta.strftime("%Y-%m-%dT23:59:59.999Z")
 
-    # Headers
+    # Headers con credenciales ya definidas
     headers = {
         'x-vtex-api-appKey': VTEX_APP_KEY,
         'x-vtex-api-appToken': VTEX_APP_TOKEN,
@@ -320,10 +326,10 @@ if st.button("📥 Extraer Clientes", type="primary", use_container_width=True):
         'REST-Range': f'resources=0-{registros_por_pagina}'
     }
 
-    # URL de scroll
+    # URL de scroll histórico de clientes
     url = f'https://{ACCOUNT_NAME}.vtexcommercestable.com.br/api/dataentities/CL/scroll'
 
-    # Parámetros
+    # Parámetros para VTEX
     params = {
         '_fields': '_all',
         '_where': f"(updatedIn>{fecha_desde_iso} AND updatedIn<{fecha_hasta_iso}) OR ((updatedIn is null) AND (createdIn>{fecha_desde_iso} AND createdIn<{fecha_hasta_iso}))"
@@ -333,12 +339,11 @@ if st.button("📥 Extraer Clientes", type="primary", use_container_width=True):
     token = None
     page_count = 0
 
-    # Barra de progreso
     progress_text = st.empty()
     info_text = st.empty()
 
     with st.spinner('🔄 Extrayendo clientes de VTEX...'):
-        while True:  # Sin límite - recorre hasta que no haya más datos
+        while True:
             page_count += 1
             if token:
                 params['_token'] = token
@@ -381,47 +386,50 @@ if st.button("📥 Extraer Clientes", type="primary", use_container_width=True):
                 st.error(f"❌ Excepción en página {page_count}: {str(e)}")
                 break
 
-    # Procesar resultados
     if clientes:
-        st.success(f"🎉 Extracción completada: {len(clientes)} clientes recuperados")
-        
-        # Convertir a DataFrame
+        # Filtrar solo los campos que queremos
         df = pd.DataFrame(clientes)
         df = df.reindex(columns=campos_clientes)
 
-        # Mostrar estadísticas
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            st.metric("Total Clientes", len(df))
-        with col2:
-            st.metric("Páginas Procesadas", page_count)
-        with col3:
-            emails_validos = df['email'].notna().sum()
-            st.metric("Emails Válidos", emails_validos)
-
-        # Mostrar muestra
-        st.markdown("#### 👀 Muestra de los primeros 5 clientes")
-        st.dataframe(df.head(5), use_container_width=True)
-
-        # Preparar CSV para descarga
-        csv_buffer = io.StringIO()
-        df.to_csv(csv_buffer, index=False, encoding='utf-8')
-        csv_data = csv_buffer.getvalue()
-
-        st.download_button(
-            label="📥 Descargar CSV Completo de Clientes",
-            data=csv_data,
-            file_name=f"clientes_vtex_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
-            mime="text/csv",
-            use_container_width=True
-        )
+        # Guardar en session_state
+        st.session_state.df_clientes = df
+        st.session_state.clientes_data = {
+            'total_clientes': len(df),
+            'emails_validos': df['email'].notna().sum(),
+            'paginas': page_count
+        }
     else:
         st.warning("⚠️ No se recuperaron clientes para el rango de fechas indicado")
 
-# Footer
-st.markdown("---")
-st.markdown("🔐 **VTEX Endpoint Validator** | Desarrollado con Streamlit")
+# Mostrar resultados si existen datos en session_state
+if st.session_state.df_clientes is not None:
+    data = st.session_state.clientes_data
+    df = st.session_state.df_clientes
+    
+    st.success(f"🎉 Extracción completada: {data['total_clientes']} clientes recuperados")
+    
+    # Mostrar estadísticas
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.metric("Total Clientes", data['total_clientes'])
+    with col2:
+        st.metric("Páginas Procesadas", data['paginas'])
+    with col3:
+        st.metric("Emails Válidos", data['emails_validos'])
 
+    # Mostrar primeros 5 clientes
+    st.markdown("#### 👀 Muestra de los primeros 5 clientes")
+    st.dataframe(df.head(5), use_container_width=True)
+
+    # Descarga
+    csv_data = df.to_csv(index=False, encoding='utf-8')
+    st.download_button(
+        label="📥 Descargar CSV Completo de Clientes",
+        data=csv_data,
+        file_name=f"clientes_vtex_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+        mime="text/csv",
+        use_container_width=True
+    )
 
 # ---------------------------------------------------------------------------------
 # TERCER BLOQUE: EXTRACCIÓN DE PRODUCTOS
