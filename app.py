@@ -116,7 +116,7 @@ def validar_ventas():
     url = f'https://{ACCOUNT_NAME}.vtexcommercestable.com.br/api/oms/pvt/orders'
     params = {
         'orderBy': 'creationDate,desc',
-        'f_status': 'ready-for-handling,handling,invoiced',
+        'f_status': 'payment-approved,ready-for-handling,handling,invoiced',
         'page': 0,
         'per_page': 1
     }
@@ -801,14 +801,7 @@ status_opciones = [
     "ready-for-handling",
     "handling",
     "invoiced",
-    "canceled",
-    "payment-pending",
-    "payment-approved",
-    "window-to-cancel",
-    "waiting-for-seller-decision",
-    "authorize-fulfillment",
-    "order-completed",
-    "on-order-completed"
+    "payment-approved"
 ]
 
 status_seleccionados = st.multiselect(
