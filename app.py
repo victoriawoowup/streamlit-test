@@ -116,7 +116,7 @@ def validar_ventas():
     url = f'https://{ACCOUNT_NAME}.vtexcommercestable.com.br/api/oms/pvt/orders'
     params = {
         'orderBy': 'creationDate,desc',
-        'f_status': 'ready-for-handling,handling,invoiced',
+        'f_status': 'payment-approved,ready-for-handling,handling,invoiced',
         'page': 0,
         'per_page': 1
     }
@@ -798,23 +798,16 @@ with col2:
 # NUEVA FUNCIONALIDAD: Filtro de status
 st.markdown("### 🏷️ Filtro de Status de Órdenes")
 status_opciones = [
+    "payment-approved",
     "ready-for-handling",
     "handling",
-    "invoiced",
-    "canceled",
-    "payment-pending",
-    "payment-approved",
-    "window-to-cancel",
-    "waiting-for-seller-decision",
-    "authorize-fulfillment",
-    "order-completed",
-    "on-order-completed"
+    "invoiced"
 ]
 
 status_seleccionados = st.multiselect(
     "Selecciona uno o más status de órdenes",
     options=status_opciones,
-    default=["ready-for-handling", "handling", "invoiced"],
+    default=["payment-approved","ready-for-handling", "handling", "invoiced"],
     help="Puedes seleccionar múltiples status. Si no seleccionas ninguno, se usarán los 3 por defecto."
 )
 
@@ -872,7 +865,7 @@ if st.button("📥 Extraer Ventas", type="primary", use_container_width=True, ke
             if status_seleccionados:
                 params["f_status"] = ",".join(status_seleccionados)
             else:
-                params["f_status"] = "ready-for-handling,handling,invoiced"
+                params["f_status"] = "payment-approved,ready-for-handling,handling,invoiced"
             
             # Solo agregar sales channel si no está vacío
             if SALES_CHANNEL and SALES_CHANNEL.strip():
@@ -1083,5 +1076,5 @@ if st.session_state.df_ventas is not None:
         file_name=f"ventas_vtex_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
         mime="text/csv",
         use_container_width=True
-        
+
     )
