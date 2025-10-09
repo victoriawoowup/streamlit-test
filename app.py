@@ -116,7 +116,7 @@ def validar_ventas():
     url = f'https://{ACCOUNT_NAME}.vtexcommercestable.com.br/api/oms/pvt/orders'
     params = {
         'orderBy': 'creationDate,desc',
-        'f_status': 'payment-approved,ready-for-handling,handling,invoiced',
+        'f_status': 'ready-for-handling,handling,invoiced',
         'page': 0,
         'per_page': 1
     }
@@ -801,13 +801,20 @@ status_opciones = [
     "ready-for-handling",
     "handling",
     "invoiced",
-    "payment-approved"
+    "canceled",
+    "payment-pending",
+    "payment-approved",
+    "window-to-cancel",
+    "waiting-for-seller-decision",
+    "authorize-fulfillment",
+    "order-completed",
+    "on-order-completed"
 ]
 
 status_seleccionados = st.multiselect(
     "Selecciona uno o más status de órdenes",
     options=status_opciones,
-    default=["payment-approved","ready-for-handling", "handling", "invoiced",],
+    default=["ready-for-handling", "handling", "invoiced"],
     help="Puedes seleccionar múltiples status. Si no seleccionas ninguno, se usarán los 3 por defecto."
 )
 
@@ -815,95 +822,136 @@ status_seleccionados = st.multiselect(
 with st.expander("⚙️ Configuración Avanzada"):
     max_workers = st.slider("Requests concurrentes", min_value=1, max_value=20, value=10, 
                             help="Cantidad de requests simultáneos para detalles de órdenes")
+    sales_window_hours = st.number_input("Ventana de tiempo (horas)", min_value=1, max_value=720, value=24,
+                                         help="Tamaño de ventana temporal para dividir la consulta si supera el límite de paginación")
+
+# Constantes
+VTEX_PAGE_LIMIT = 30  # Límite de páginas de VTEX
 
 if st.button("📥 Extraer Ventas", type="primary", use_container_width=True, key="btn_extraer_ventas"):
     validar_credenciales()
     
-    # Convertir fechas a ISO 8601 UTC
-    fecha_desde_iso = fecha_desde_ventas.strftime("%Y-%m-%dT00:00:00.000Z")
-    fecha_hasta_iso = (fecha_hasta_ventas + timedelta(days=1)).strftime("%Y-%m-%dT00:00:00.000Z")
-    
-    st.info("🔄 Paso 1/2: Extrayendo órdenes...")
+    st.info("🔄 Extrayendo órdenes con ventanas de tiempo adaptativas...")
     
     # Headers
     headers_ventas = get_vtex_headers()
     
-    # ===== FETCH ÓRDENES PAGINADAS =====
+    # ===== FETCH ÓRDENES CON VENTANAS TEMPORALES =====
     all_orders = []
-    page = 1
-    per_page = 100
+    
+    # Convertir fechas a timestamps
+    from_timestamp = int(fecha_desde_ventas.strftime("%s"))
+    to_timestamp = int((fecha_hasta_ventas + timedelta(days=1)).strftime("%s"))
+    
+    interval_seconds = sales_window_hours * 3600  # Convertir horas a segundos
+    current_from = from_timestamp
     
     progress_text_ventas = st.empty()
     info_text_ventas = st.empty()
+    window_count = 0
     
-    with st.spinner('💰 Extrayendo órdenes de VTEX...'):
-        while True:
-            url_orders = f"https://{ACCOUNT_NAME}.vtexcommercestable.com.br/api/oms/pvt/orders"
+    with st.spinner('💰 Extrayendo órdenes de VTEX con ventanas adaptativas...'):
+        while current_from <= to_timestamp:
+            window_count += 1
+            current_to = min(current_from + interval_seconds, to_timestamp)
+            
+            # Convertir timestamps a formato ISO
+            fecha_desde_iso = datetime.fromtimestamp(current_from).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+            fecha_hasta_iso = datetime.fromtimestamp(current_to).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+            
+            progress_text_ventas.text(f"🕐 Ventana {window_count}: {fecha_desde_iso[:10]} - {fecha_hasta_iso[:10]}")
+            
+            # Parámetros base
             params = {
                 "orderBy": "creationDate,asc",
                 "f_creationDate": f"creationDate:[{fecha_desde_iso} TO {fecha_hasta_iso}]",
-                "page": page,
-                "per_page": per_page
+                "per_page": 100
             }
             
             # Aplicar filtro de status
             if status_seleccionados:
                 params["f_status"] = ",".join(status_seleccionados)
             else:
-                # Si no hay ninguno seleccionado, usar los 3 por defecto
                 params["f_status"] = "ready-for-handling,handling,invoiced"
             
             # Solo agregar sales channel si no está vacío
             if SALES_CHANNEL and SALES_CHANNEL.strip():
                 params["f_salesChannel"] = SALES_CHANNEL
             
-            try:
-                resp = requests.get(url_orders, headers=headers_ventas, params=params, timeout=30)
+            # Intentar obtener órdenes de esta ventana
+            page = 1
+            window_interval = interval_seconds
+            window_from = current_from
+            
+            while True:
+                params["page"] = page
                 
-                if resp.status_code != 200:
-                    st.error(f"❌ Error en página {page}: Status {resp.status_code}")
-                    with st.expander("Ver detalle del error"):
-                        st.code(resp.text[:500])
+                # Recalcular fechas si se redujo el intervalo
+                fecha_desde_iso = datetime.fromtimestamp(window_from).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+                fecha_hasta_iso = datetime.fromtimestamp(min(window_from + window_interval, current_to)).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+                params["f_creationDate"] = f"creationDate:[{fecha_desde_iso} TO {fecha_hasta_iso}]"
+                
+                try:
+                    url_orders = f"https://{ACCOUNT_NAME}.vtexcommercestable.com.br/api/oms/pvt/orders"
+                    resp = requests.get(url_orders, headers=headers_ventas, params=params, timeout=30)
+                    
+                    if resp.status_code != 200:
+                        st.error(f"❌ Error en ventana {window_count}, página {page}: Status {resp.status_code}")
+                        with st.expander("Ver detalle del error"):
+                            st.code(resp.text[:500])
+                        break
+                    
+                    data = resp.json()
+                    orders = data.get("list", [])
+                    paging = data.get("paging", {})
+                    total_pages = paging.get("pages", 0)
+                    total_orders = paging.get("total", 0)
+                    
+                    # CRITICAL: Si se supera el límite de páginas de VTEX, reducir ventana
+                    if total_pages > VTEX_PAGE_LIMIT:
+                        st.warning(f"⚠️ Límite de páginas alcanzado ({total_pages} > {VTEX_PAGE_LIMIT}). Dividiendo ventana temporal...")
+                        window_interval = window_interval // 2  # Reducir a la mitad
+                        
+                        if window_interval < 3600:  # Si es menor a 1 hora, algo está mal
+                            st.error("❌ No se puede reducir más la ventana temporal. Hay demasiadas órdenes en un período muy corto.")
+                            break
+                        
+                        page = 1  # Reiniciar paginación
+                        info_text_ventas.warning(f"🔄 Nueva ventana: {window_interval // 3600} horas")
+                        continue
+                    
+                    # Agregar órdenes
+                    if orders:
+                        all_orders.extend(orders)
+                        info_text_ventas.info(f"✅ Ventana {window_count}, Página {page}: {len(orders)} órdenes | Total acumulado: {len(all_orders)}")
+                    
+                    # Verificar si hay más páginas
+                    if page >= total_pages or (page * 100) >= total_orders:
+                        break
+                    
+                    page += 1
+                    time.sleep(0.3)
+                    
+                except requests.exceptions.Timeout:
+                    st.error(f"⏱️ Timeout en ventana {window_count}, página {page}. Reintentando...")
+                    time.sleep(2)
+                    continue
+                except Exception as e:
+                    st.error(f"❌ Excepción en ventana {window_count}, página {page}: {str(e)}")
                     break
-                
-                data = resp.json()
-                orders = data.get("list", [])
-                
-                if not orders:
-                    info_text_ventas.success("✅ No hay más órdenes para procesar")
-                    break
-                
-                all_orders.extend(orders)
-                
-                # Debug: contar órdenes únicas vs duplicadas
-                order_ids = [o.get("orderId") for o in all_orders]
-                unique_ids = set(order_ids)
-                if len(order_ids) != len(unique_ids):
-                    st.warning(f"⚠️ Se detectaron {len(order_ids) - len(unique_ids)} órdenes duplicadas en la extracción")
-
-                progress_text_ventas.text(f"📄 Página {page}")
-                info_text_ventas.info(f"✅ {len(orders)} órdenes en esta página | Total acumulado: {len(all_orders)}")
-                
-                paging = data.get("paging", {})
-                total_orders = paging.get("total", 0)
-                total_pages = paging.get("pages", 0)
-
-                if page >= total_pages:
-                    info_text_ventas.success("✅ Se procesaron todas las órdenes disponibles")
-                    break
-
-                page += 1
-                time.sleep(0.3)
-                
-            except requests.exceptions.Timeout:
-                st.error(f"⏱️ Timeout en página {page}. Reintentando...")
-                time.sleep(2)
-                continue
-            except Exception as e:
-                st.error(f"❌ Excepción en página {page}: {str(e)}")
-                break
+            
+            # Avanzar al siguiente intervalo
+            current_from = current_to
+    
+    info_text_ventas.success(f"✅ Extracción completada: {len(all_orders)} órdenes en {window_count} ventanas")
     
     # ===== FETCH DETALLES CON CONCURRENCIA =====
+    # Eliminar duplicados antes de procesar
+    unique_order_ids = list(set([o.get("orderId") for o in all_orders]))
+    if len(unique_order_ids) < len(all_orders):
+        st.warning(f"⚠️ Se eliminaron {len(all_orders) - len(unique_order_ids)} órdenes duplicadas")
+        all_orders = [{"orderId": oid} for oid in unique_order_ids]
+    
     if all_orders:
         st.info(f"🔄 Paso 2/2: Obteniendo detalles de {len(all_orders)} órdenes (concurrente)...")
         
