@@ -151,30 +151,34 @@ def validar_productos():
         if resp.status_code in [200, 206]:
             st.success("✅ ACCESO EXITOSO a API de Productos")
             products = resp.json()
-            product_id = reference_id = None
+            product_id = reference_id = item_id = None
             for product in products:
                 prod_id = product.get('productId')
                 ref = product.get('productReference')
+                items = product.get('items', [])
+                sku_id = items[0].get('itemId') if items else None
+                
                 if prod_id and ref:
                     product_id = prod_id
                     reference_id = ref
-                    st.info(f"📦 Primer producto encontrado - ID: `{product_id}`, Ref: `{reference_id}`")
+                    item_id = sku_id
+                    st.info(f"📦 Primer producto encontrado - ProductID: `{product_id}`, Ref: `{reference_id}`, ItemID: `{item_id}`")
                     break
             if not product_id:
                 st.warning("⚠️ No se encontró productId o referenceId")
             log_resultado("Productos", "✅ SUCCESS", f"Productos encontrados: {len(products)}")
             time.sleep(0.3)
-            return product_id, reference_id
+            return product_id, reference_id, item_id
         else:
             st.error(f"❌ ERROR en API de Productos - Status: {resp.status_code}")
             log_resultado("Productos", "❌ ERROR", f"Status: {resp.status_code}")
             with st.expander("Ver detalle del error"):
                 st.code(resp.text[:500])
-            return None, None
+            return None, None, None
     except Exception as e:
         st.error(f"❌ EXCEPCIÓN en API de Productos: {str(e)}")
         log_resultado("Productos", "❌ EXCEPTION", str(e))
-        return None, None
+        return None, None, None
 
 def validar_clientes():
     st.subheader("3️⃣ Clientes")
@@ -198,24 +202,39 @@ def validar_clientes():
     
     time.sleep(0.3)
 
-def validar_precios(product_id):
+def validar_precios(product_id, item_id=None):
     st.subheader("4️⃣ Precios")
-    if not product_id:
-        st.warning("⚠️ SALTEADO - No hay productId disponible")
-        log_resultado("Precios", "⚠️ SKIPPED", "No hay productId")
+    if not product_id and not item_id:
+        st.warning("⚠️ SALTEADO - No hay productId ni itemId disponible")
+        log_resultado("Precios", "⚠️ SKIPPED", "No hay productId ni itemId")
         return
 
     headers = get_vtex_headers_alt()
+    
+    # Intentar primero con productId
     url = f'https://{ACCOUNT_NAME}.vtexcommercestable.com.br/api/pricing/prices/{product_id}'
 
     try:
         resp = requests.get(url, headers=headers, timeout=15)
         if resp.status_code == 200:
-            st.success("✅ ACCESO EXITOSO a API de Precios")
+            st.success(f"✅ ACCESO EXITOSO a API de Precios (usando ProductID: {product_id})")
             log_resultado("Precios", "✅ SUCCESS", f"ProductId: {product_id}")
         else:
-            st.error(f"❌ ERROR en API de Precios - Status: {resp.status_code}")
-            log_resultado("Precios", "❌ ERROR", f"Status: {resp.status_code}")
+            # Si falla con productId, intentar con itemId
+            if item_id:
+                st.warning(f"⚠️ ProductID {product_id} falló, intentando con ItemID...")
+                url_item = f'https://{ACCOUNT_NAME}.vtexcommercestable.com.br/api/pricing/prices/{item_id}'
+                resp_item = requests.get(url_item, headers=headers, timeout=15)
+                
+                if resp_item.status_code == 200:
+                    st.success(f"✅ ACCESO EXITOSO a API de Precios (usando ItemID: {item_id})")
+                    log_resultado("Precios", "✅ SUCCESS", f"ItemId: {item_id} (fallback)")
+                else:
+                    st.error(f"❌ ERROR en API de Precios - Status ProductID: {resp.status_code}, Status ItemID: {resp_item.status_code}")
+                    log_resultado("Precios", "❌ ERROR", f"ProductID y ItemID fallaron")
+            else:
+                st.error(f"❌ ERROR en API de Precios - Status: {resp.status_code}")
+                log_resultado("Precios", "❌ ERROR", f"Status: {resp.status_code}")
     except Exception as e:
         st.error(f"❌ EXCEPCIÓN en API de Precios: {str(e)}")
         log_resultado("Precios", "❌ EXCEPTION", str(e))
@@ -305,9 +324,9 @@ if st.button("🚀 Validar Todos los Endpoints", type="primary", use_container_w
     
     with st.spinner('🔄 Validando endpoints VTEX...'):
         validar_ventas()
-        product_id, reference_id = validar_productos()
+        product_id, reference_id, item_id = validar_productos()
         validar_clientes()
-        validar_precios(product_id)
+        validar_precios(product_id, item_id)
         validar_categorias()
         validar_simulador(product_id)
     
@@ -1019,5 +1038,4 @@ if st.session_state.df_ventas is not None:
         file_name=f"ventas_vtex_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
         mime="text/csv",
         use_container_width=True
-        
     )
