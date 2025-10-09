@@ -3,7 +3,7 @@ import requests
 import time
 import pandas as pd
 import io
-from datetime import datetime
+from datetime import datetime, timedelta
 
 # ========================= ESTILOS CSS =========================
 st.markdown("""
@@ -43,11 +43,11 @@ st.markdown("""
 
 st.set_page_config(
     page_title="VTEX Validator", 
-    page_icon="icono_woowup.png",  # Archivo local
+    page_icon="icono_woowup.png",
     layout="wide"
 )
 
-st.markdown("<br>", unsafe_allow_html=True)  # Espacio extra
+st.markdown("<br>", unsafe_allow_html=True)
 
 # Logo WOOWUP centrado
 col1, col2, col3 = st.columns([2, 1, 2])
@@ -75,12 +75,12 @@ with col1:
 
 with col2:
     VTEX_APP_TOKEN = st.text_input("App Token", type="password", placeholder="*******************")
-    SALES_CHANNEL = st.text_input("Sales Channel", placeholder="1")
+    SALES_CHANNEL = st.text_input("Sales Channel (opcional)", placeholder="1", help="Dejar vacío para traer todos los sales channels")
 
-# Validación de campos obligatorios
+# Validación de campos obligatorios (sin Sales Channel)
 def validar_credenciales():
-    if not all([ACCOUNT_NAME, VTEX_APP_KEY, VTEX_APP_TOKEN, SALES_CHANNEL]):
-        st.warning("⚠️ Por favor completa todos los campos antes de continuar")
+    if not all([ACCOUNT_NAME, VTEX_APP_KEY, VTEX_APP_TOKEN]):
+        st.warning("⚠️ Por favor completa Cuenta, App Key y App Token antes de continuar")
         st.stop()
 
 # =========================
@@ -117,10 +117,13 @@ def validar_ventas():
     params = {
         'orderBy': 'creationDate,desc',
         'f_status': 'ready-for-handling,handling,invoiced',
-        'f_salesChannel': SALES_CHANNEL,
         'page': 0,
         'per_page': 1
     }
+    
+    # Solo agregar sales channel si no está vacío
+    if SALES_CHANNEL and SALES_CHANNEL.strip():
+        params['f_salesChannel'] = SALES_CHANNEL
 
     try:
         resp = requests.get(url, headers=headers, params=params, timeout=15)
@@ -136,7 +139,7 @@ def validar_ventas():
         st.error(f"❌ EXCEPCIÓN en API de Ventas: {str(e)}")
         log_resultado("Ventas", "❌ EXCEPTION", str(e))
     
-    time.sleep(0.3)  # Rate limiting
+    time.sleep(0.3)
 
 def validar_productos():
     st.subheader("2️⃣ Productos")
@@ -250,7 +253,10 @@ def validar_simulador(product_id):
     
     headers = get_vtex_headers_alt()
     url = f'https://{ACCOUNT_NAME}.vtexcommercestable.com.br/api/checkout/pvt/orderForms/simulation'
-    payload = {"items": [{"id": str(product_id), "quantity": 1, "seller": SALES_CHANNEL}]}
+    
+    # Usar sales channel si está disponible, sino "1" por defecto
+    seller = SALES_CHANNEL if SALES_CHANNEL and SALES_CHANNEL.strip() else "1"
+    payload = {"items": [{"id": str(product_id), "quantity": 1, "seller": seller}]}
 
     try:
         resp = requests.post(url, headers=headers, json=payload, timeout=15)
@@ -273,7 +279,7 @@ def generar_reporte_txt():
     reporte.append("REPORTE DE VALIDACIÓN DE ENDPOINTS VTEX")
     reporte.append("=" * 60)
     reporte.append(f"Cuenta: {ACCOUNT_NAME}")
-    reporte.append(f"Sales Channel: {SALES_CHANNEL}")
+    reporte.append(f"Sales Channel: {SALES_CHANNEL if SALES_CHANNEL else 'Todos'}")
     reporte.append(f"Fecha: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     reporte.append("=" * 60)
     reporte.append("")
@@ -573,7 +579,7 @@ if st.button("📥 Extraer Productos", type="primary", use_container_width=True)
                     break
                 
                 from_index = to_index + 1
-                time.sleep(0.5)  # Rate limiting
+                time.sleep(0.5)
                 
             except requests.exceptions.Timeout:
                 st.error(f"⏱️ Timeout en página {page_count}. Reintentando...")
@@ -738,7 +744,7 @@ if st.session_state.df_productos is not None:
 
 
 # ---------------------------------------------------------------------------------
-# CUARTO BLOQUE: EXTRACCIÓN DE VENTAS
+# CUARTO BLOQUE: EXTRACCIÓN DE VENTAS (MEJORADO)
 # ---------------------------------------------------------------------------------
 st.markdown("---")
 st.markdown("---")
@@ -750,7 +756,7 @@ if 'ventas_data' not in st.session_state:
 if 'df_ventas' not in st.session_state:
     st.session_state.df_ventas = None
 
-st.markdown("### 📅 Rango de Fechas")
+st.markdown("### 📅 Configuración de Filtros")
 
 col1, col2 = st.columns(2)
 
@@ -770,17 +776,36 @@ with col2:
         key="ventas_hasta"
     )
 
+# NUEVA FUNCIONALIDAD: Filtro de status
+st.markdown("### 🏷️ Filtro de Status de Órdenes")
+status_opciones = {
+    "Todas": "",
+    "Ready for handling": "ready-for-handling",
+    "Handling": "handling",
+    "Invoiced": "invoiced",
+    "Canceled": "canceled",
+    "Payment pending": "payment-pending",
+    "Payment approved": "payment-approved"
+}
+
+status_seleccionado = st.selectbox(
+    "Selecciona el status de las órdenes",
+    options=list(status_opciones.keys()),
+    index=0,
+    help="Filtra las órdenes por su status. 'Todas' trae ready-for-handling, handling e invoiced"
+)
+
 # Configuración de workers para requests concurrentes
 with st.expander("⚙️ Configuración Avanzada"):
     max_workers = st.slider("Requests concurrentes", min_value=1, max_value=20, value=10, 
                             help="Cantidad de requests simultáneos para detalles de órdenes")
 
-if st.button("📥 Extraer Ventas", type="primary", use_container_width=True):
+if st.button("📥 Extraer Ventas", type="primary", use_container_width=True, key="btn_extraer_ventas"):
     validar_credenciales()
     
     # Convertir fechas a ISO 8601 UTC
     fecha_desde_iso = fecha_desde_ventas.strftime("%Y-%m-%dT00:00:00.000Z")
-    fecha_hasta_iso = fecha_hasta_ventas.strftime("%Y-%m-%dT23:59:59.999Z")
+    fecha_hasta_iso = (fecha_hasta_ventas + timedelta(days=1)).strftime("%Y-%m-%dT00:00:00.000Z")
     
     st.info("🔄 Paso 1/2: Extrayendo órdenes...")
     
@@ -789,7 +814,7 @@ if st.button("📥 Extraer Ventas", type="primary", use_container_width=True):
     
     # ===== FETCH ÓRDENES PAGINADAS =====
     all_orders = []
-    page = 0
+    page = 1
     per_page = 100
     
     progress_text_ventas = st.empty()
@@ -800,12 +825,21 @@ if st.button("📥 Extraer Ventas", type="primary", use_container_width=True):
             url_orders = f"https://{ACCOUNT_NAME}.vtexcommercestable.com.br/api/oms/pvt/orders"
             params = {
                 "orderBy": "creationDate,asc",
-                "f_status": "ready-for-handling,handling,invoiced",
                 "f_creationDate": f"creationDate:[{fecha_desde_iso} TO {fecha_hasta_iso}]",
-                "f_salesChannel": SALES_CHANNEL,
                 "page": page,
                 "per_page": per_page
             }
+            
+            # Aplicar filtro de status
+            status_valor = status_opciones[status_seleccionado]
+            if status_valor:
+                params["f_status"] = status_valor
+            else:
+                params["f_status"] = "ready-for-handling,handling,invoiced"
+            
+            # Solo agregar sales channel si no está vacío
+            if SALES_CHANNEL and SALES_CHANNEL.strip():
+                params["f_salesChannel"] = SALES_CHANNEL
             
             try:
                 resp = requests.get(url_orders, headers=headers_ventas, params=params, timeout=30)
@@ -825,15 +859,25 @@ if st.button("📥 Extraer Ventas", type="primary", use_container_width=True):
                 
                 all_orders.extend(orders)
                 
+                # Debug: contar órdenes únicas vs duplicadas
+                order_ids = [o.get("orderId") for o in all_orders]
+                unique_ids = set(order_ids)
+                if len(order_ids) != len(unique_ids):
+                    st.warning(f"⚠️ Se detectaron {len(order_ids) - len(unique_ids)} órdenes duplicadas en la extracción")
+
                 progress_text_ventas.text(f"📄 Página {page}")
                 info_text_ventas.info(f"✅ {len(orders)} órdenes en esta página | Total acumulado: {len(all_orders)}")
                 
-                if len(orders) < per_page:
+                paging = data.get("paging", {})
+                total_orders = paging.get("total", 0)
+                total_pages = paging.get("pages", 0)
+
+                if page >= total_pages:
                     info_text_ventas.success("✅ Se procesaron todas las órdenes disponibles")
                     break
-                
+
                 page += 1
-                time.sleep(0.3)  # Rate limiting
+                time.sleep(0.3)
                 
             except requests.exceptions.Timeout:
                 st.error(f"⏱️ Timeout en página {page}. Reintentando...")
@@ -956,8 +1000,12 @@ if st.session_state.df_ventas is not None:
     with col2:
         st.metric("Total Items", data['total_items'])
     with col3:
-        total_value = df_ventas['value'].astype(float).sum() / 100  # VTEX guarda en centavos
-        st.metric("Valor Total", f"${total_value:,.2f}")
+        # Calcular valor total (VTEX guarda en centavos)
+        try:
+            total_value = df_ventas['value'].astype(float).sum() / 100
+            st.metric("Valor Total", f"${total_value:,.2f}")
+        except:
+            st.metric("Valor Total", "N/A")
     
     # Mostrar muestra
     st.markdown("#### 👀 Muestra de las primeras 5 ventas")
@@ -971,4 +1019,4 @@ if st.session_state.df_ventas is not None:
         file_name=f"ventas_vtex_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
         mime="text/csv",
         use_container_width=True
-    )      
+    )
