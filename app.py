@@ -807,7 +807,7 @@ status_opciones = [
 status_seleccionados = st.multiselect(
     "Selecciona uno o más status de órdenes",
     options=status_opciones,
-    default=["ready-for-handling", "handling", "invoiced"],
+    default=["payment-approved","ready-for-handling", "handling", "invoiced",],
     help="Puedes seleccionar múltiples status. Si no seleccionas ninguno, se usarán los 3 por defecto."
 )
 
