@@ -797,21 +797,25 @@ with col2:
 
 # NUEVA FUNCIONALIDAD: Filtro de status
 st.markdown("### 🏷️ Filtro de Status de Órdenes")
-status_opciones = {
-    "Todas": "",
-    "Ready for handling": "ready-for-handling",
-    "Handling": "handling",
-    "Invoiced": "invoiced",
-    "Canceled": "canceled",
-    "Payment pending": "payment-pending",
-    "Payment approved": "payment-approved"
-}
+status_opciones = [
+    "ready-for-handling",
+    "handling",
+    "invoiced",
+    "canceled",
+    "payment-pending",
+    "payment-approved",
+    "window-to-cancel",
+    "waiting-for-seller-decision",
+    "authorize-fulfillment",
+    "order-completed",
+    "on-order-completed"
+]
 
-status_seleccionado = st.selectbox(
-    "Selecciona el status de las órdenes",
-    options=list(status_opciones.keys()),
-    index=0,
-    help="Filtra las órdenes por su status. 'Todas' trae ready-for-handling, handling e invoiced"
+status_seleccionados = st.multiselect(
+    "Selecciona uno o más status de órdenes",
+    options=status_opciones,
+    default=["ready-for-handling", "handling", "invoiced"],
+    help="Puedes seleccionar múltiples status. Si no seleccionas ninguno, se usarán los 3 por defecto."
 )
 
 # Configuración de workers para requests concurrentes
@@ -850,10 +854,10 @@ if st.button("📥 Extraer Ventas", type="primary", use_container_width=True, ke
             }
             
             # Aplicar filtro de status
-            status_valor = status_opciones[status_seleccionado]
-            if status_valor:
-                params["f_status"] = status_valor
+            if status_seleccionados:
+                params["f_status"] = ",".join(status_seleccionados)
             else:
+                # Si no hay ninguno seleccionado, usar los 3 por defecto
                 params["f_status"] = "ready-for-handling,handling,invoiced"
             
             # Solo agregar sales channel si no está vacío
