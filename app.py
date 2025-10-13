@@ -1018,16 +1018,21 @@ if st.button("📥 Extraer Ventas", type="primary", use_container_width=True, ke
                     ])
                 else:
                     for item in items:
-                        refId = item.get("refId", "N/A")
-                        name = item.get("name", "N/A")
-                        qty = item.get("quantity", "N/A")
-                        price = item.get("price", "N/A")
+                        # Extraer todos los identificadores posibles
+                            product_id = item.get("productId", "N/A")
+                            sku_id = item.get("id", "N/A")  # Este es el SKU ID
+                            ref_id = item.get("refId", "N/A")
+                            name = item.get("name", "N/A")
+                            qty = item.get("quantity", "N/A")
+                            price = item.get("price", "N/A")
+                            
+                            ventas_rows.append([
+                                order_id, status, creation, sales_channel, total_value,
+                                client_email, client_first, client_last, client_doc,
+                                product_id, sku_id, ref_id, name, qty, price
+                            ])    
                         
-                        ventas_rows.append([
-                            order_id, status, creation, sales_channel, total_value,
-                            client_email, client_first, client_last, client_doc,
-                            refId, name, qty, price
-                        ])
+                        
             
             # Crear DataFrame y guardar en session_state
             st.session_state.df_ventas = pd.DataFrame(
