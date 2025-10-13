@@ -763,7 +763,7 @@ if st.session_state.df_productos is not None:
 
 
 # ---------------------------------------------------------------------------------
-# CUARTO BLOQUE: EXTRACCIÓN DE VENTAS (MEJORADO)
+# CUARTO BLOQUE: EXTRACCIÓN DE VENTAS (MEJORADO Y CORREGIDO)
 # ---------------------------------------------------------------------------------
 st.markdown("---")
 st.markdown("---")
@@ -829,30 +829,30 @@ if st.button("📥 Extraer Ventas", type="primary", use_container_width=True, ke
     # Headers
     headers_ventas = get_vtex_headers()
     
-    # ===== FETCH ÓRDENES CON VENTANAS TEMPORALES =====
+    # ===== FETCH ÓRDENES CON VENTANAS TEMPORALES (CORREGIDO) =====
     all_orders = []
     
-    # Convertir fechas a timestamps
-    from_timestamp = int(fecha_desde_ventas.strftime("%s"))
-    to_timestamp = int((fecha_hasta_ventas + timedelta(days=1)).strftime("%s"))
+    # Convertir fechas a datetime con hora
+    fecha_inicio = datetime.combine(fecha_desde_ventas, datetime.min.time())
+    fecha_fin = datetime.combine(fecha_hasta_ventas, datetime.max.time())
     
-    interval_seconds = sales_window_hours * 3600  # Convertir horas a segundos
-    current_from = from_timestamp
+    current_from = fecha_inicio
+    interval_hours = sales_window_hours
     
     progress_text_ventas = st.empty()
     info_text_ventas = st.empty()
     window_count = 0
     
     with st.spinner('💰 Extrayendo órdenes de VTEX con ventanas adaptativas...'):
-        while current_from <= to_timestamp:
+        while current_from < fecha_fin:
             window_count += 1
-            current_to = min(current_from + interval_seconds, to_timestamp)
+            current_to = min(current_from + timedelta(hours=interval_hours), fecha_fin)
             
-            # Convertir timestamps a formato ISO
-            fecha_desde_iso = datetime.fromtimestamp(current_from).strftime("%Y-%m-%dT%H:%M:%S.000Z")
-            fecha_hasta_iso = datetime.fromtimestamp(current_to).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+            # Convertir a formato ISO
+            fecha_desde_iso = current_from.strftime("%Y-%m-%dT%H:%M:%S.000Z")
+            fecha_hasta_iso = current_to.strftime("%Y-%m-%dT%H:%M:%S.000Z")
             
-            progress_text_ventas.text(f"🕐 Ventana {window_count}: {fecha_desde_iso[:10]} - {fecha_hasta_iso[:10]}")
+            progress_text_ventas.text(f"🕐 Ventana {window_count}: {fecha_desde_iso[:10]} - {fecha_hasta_iso[:10]} ({interval_hours}h)")
             
             # Parámetros base
             params = {
@@ -873,16 +873,10 @@ if st.button("📥 Extraer Ventas", type="primary", use_container_width=True, ke
             
             # Intentar obtener órdenes de esta ventana
             page = 1
-            window_interval = interval_seconds
-            window_from = current_from
+            ventana_procesada = False
             
-            while True:
+            while not ventana_procesada:
                 params["page"] = page
-                
-                # Recalcular fechas si se redujo el intervalo
-                fecha_desde_iso = datetime.fromtimestamp(window_from).strftime("%Y-%m-%dT%H:%M:%S.000Z")
-                fecha_hasta_iso = datetime.fromtimestamp(min(window_from + window_interval, current_to)).strftime("%Y-%m-%dT%H:%M:%S.000Z")
-                params["f_creationDate"] = f"creationDate:[{fecha_desde_iso} TO {fecha_hasta_iso}]"
                 
                 try:
                     url_orders = f"https://{ACCOUNT_NAME}.vtexcommercestable.com.br/api/oms/pvt/orders"
@@ -892,6 +886,7 @@ if st.button("📥 Extraer Ventas", type="primary", use_container_width=True, ke
                         st.error(f"❌ Error en ventana {window_count}, página {page}: Status {resp.status_code}")
                         with st.expander("Ver detalle del error"):
                             st.code(resp.text[:500])
+                        ventana_procesada = True
                         break
                     
                     data = resp.json()
@@ -901,25 +896,32 @@ if st.button("📥 Extraer Ventas", type="primary", use_container_width=True, ke
                     total_orders = paging.get("total", 0)
                     
                     # CRITICAL: Si se supera el límite de páginas de VTEX, reducir ventana
-                    if total_pages > VTEX_PAGE_LIMIT:
+                    if page == 1 and total_pages > VTEX_PAGE_LIMIT:
                         st.warning(f"⚠️ Límite de páginas alcanzado ({total_pages} > {VTEX_PAGE_LIMIT}). Dividiendo ventana temporal...")
-                        window_interval = window_interval // 2  # Reducir a la mitad
+                        interval_hours = max(1, interval_hours // 2)  # Reducir a la mitad, mínimo 1 hora
                         
-                        if window_interval < 3600:  # Si es menor a 1 hora, algo está mal
+                        if interval_hours < 1:
                             st.error("❌ No se puede reducir más la ventana temporal. Hay demasiadas órdenes en un período muy corto.")
+                            ventana_procesada = True
                             break
                         
+                        # Recalcular current_to con nuevo intervalo
+                        current_to = min(current_from + timedelta(hours=interval_hours), fecha_fin)
+                        fecha_hasta_iso = current_to.strftime("%Y-%m-%dT%H:%M:%S.000Z")
+                        params["f_creationDate"] = f"creationDate:[{fecha_desde_iso} TO {fecha_hasta_iso}]"
+                        
+                        info_text_ventas.warning(f"🔄 Nueva ventana: {interval_hours} hora(s)")
                         page = 1  # Reiniciar paginación
-                        info_text_ventas.warning(f"🔄 Nueva ventana: {window_interval // 3600} horas")
                         continue
                     
                     # Agregar órdenes
                     if orders:
                         all_orders.extend(orders)
-                        info_text_ventas.info(f"✅ Ventana {window_count}, Página {page}: {len(orders)} órdenes | Total acumulado: {len(all_orders)}")
+                        info_text_ventas.info(f"✅ Ventana {window_count}, Página {page}/{total_pages}: {len(orders)} órdenes | Total acumulado: {len(all_orders)}")
                     
                     # Verificar si hay más páginas
-                    if page >= total_pages or (page * 100) >= total_orders:
+                    if page >= total_pages or len(orders) == 0:
+                        ventana_procesada = True
                         break
                     
                     page += 1
@@ -931,10 +933,12 @@ if st.button("📥 Extraer Ventas", type="primary", use_container_width=True, ke
                     continue
                 except Exception as e:
                     st.error(f"❌ Excepción en ventana {window_count}, página {page}: {str(e)}")
+                    ventana_procesada = True
                     break
             
             # Avanzar al siguiente intervalo
             current_from = current_to
+            time.sleep(0.5)  # Pausa entre ventanas
     
     info_text_ventas.success(f"✅ Extracción completada: {len(all_orders)} órdenes en {window_count} ventanas")
     
@@ -1076,5 +1080,4 @@ if st.session_state.df_ventas is not None:
         file_name=f"ventas_vtex_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
         mime="text/csv",
         use_container_width=True
-
     )
