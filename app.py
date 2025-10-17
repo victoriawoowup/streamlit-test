@@ -642,9 +642,10 @@ if st.button("📥 Extraer Productos", type="primary", use_container_width=True)
             product_reference = producto.get('productReference', 'N/A')
             brand = producto.get('brand', 'N/A')
             category_id = producto.get('categoryId', 'N/A')
-            description = producto.get('description', '') or producto.get('metaTagDescription', 'N/A')
+            # Asegurar que la descripción siempre sea string
+            description = producto.get('description') or producto.get('metaTagDescription') or ''
             category_name = category_map.get(int(category_id), 'N/A') if category_id != 'N/A' else 'N/A'
-            
+
             atributos = producto.get("_atributos", {})
             
             # Procesar SKUs
@@ -660,7 +661,7 @@ if st.button("📥 Extraer Productos", type="primary", use_container_width=True)
                 
                 productos_rows.append([
                     product_id, product_reference, 'N/A', 'N/A', product_name,
-                    description[:500], brand, category_id, category_name, 0
+                    (description or "")[:500], brand, category_id, category_name, 0
                 ] + attr_values)
             else:
                 for item in items:
@@ -684,7 +685,7 @@ if st.button("📥 Extraer Productos", type="primary", use_container_width=True)
                     
                     productos_rows.append([
                         product_id, product_reference, sku_id, sku_name, product_name,
-                        description[:500], brand, category_id, category_name, available_qty
+                        (description or "")[:500], brand, category_id, category_name, available_qty
                     ] + attr_values)
         
         # Crear DataFrames y guardar en session_state
