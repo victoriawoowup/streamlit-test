@@ -499,11 +499,11 @@ if st.session_state.df_clientes is not None:
     )
 
 # ---------------------------------------------------------------------------------
-# TERCER BLOQUE: EXTRACCIÓN DE PRODUCTOS (VERSIÓN COMPLETA - TODOS LOS SKUs + ATRIBUTOS)
+# TERCER BLOQUE: EXTRACCIÓN DE PRODUCTOS (VERSIÓN DUAL: TODOS O SOLO ACTIVOS)
 # ---------------------------------------------------------------------------------
 st.markdown("---")
 st.markdown("---")
-st.header("📦 Extracción de Productos (Todos los SKUs)")
+st.header("📦 Extracción de Productos")
 
 # Inicializar session state para productos
 if 'productos_data' not in st.session_state:
@@ -522,11 +522,68 @@ with st.expander("⚙️ Configuración Avanzada"):
     page_size = st.number_input("SKUs por página", min_value=1, max_value=1000, value=500,
                                 help="Cantidad de SKUs a obtener por cada request de listado")
 
-if st.button("📥 Extraer Todos los Productos", type="primary", use_container_width=True):
+# Selector del tipo de extracción
+st.markdown("### 📊 Selecciona el tipo de extracción")
+col_btn1, col_btn2 = st.columns(2)
+
+with col_btn1:
+    btn_todos = st.button("📥 Extraer TODOS los Productos", type="primary", use_container_width=True,
+                          help="Extrae todos los SKUs (activos e inactivos) usando el endpoint completo")
+
+with col_btn2:
+    btn_activos = st.button("✅ Extraer Solo ACTIVOS", type="secondary", use_container_width=True,
+                            help="Extrae solo productos activos usando el endpoint público")
+
+# ====================================================================================
+# FUNCIÓN COMÚN: OBTENER ÁRBOL DE CATEGORÍAS
+# ====================================================================================
+def obtener_categorias():
+    """Obtiene el árbol de categorías de VTEX"""
+    st.info("🔄 Obteniendo árbol de categorías...")
+    
+    category_map = {}
+    headers_cat = get_vtex_headers()
+    headers_cat['Accept'] = 'application/vnd.vtex.ds.v10+json'
+    headers_cat['REST-Range'] = 'resources=0-10'
+    url_categorias = f'https://{ACCOUNT_NAME}.vtexcommercestable.com.br/api/catalog_system/pub/category/tree/10'
+    
+    try:
+        resp_cat = requests.get(url_categorias, headers=headers_cat, timeout=30)
+        if resp_cat.status_code == 200:
+            tree = resp_cat.json()
+            
+            def extract_categories(nodes, parent_path=""):
+                for node in nodes:
+                    cat_id = node.get('id')
+                    cat_name = node.get('name')
+                    full_path = f"{parent_path} > {cat_name}" if parent_path else cat_name
+                    if cat_id:
+                        category_map[cat_id] = full_path
+                    children = node.get('children', [])
+                    if children:
+                        extract_categories(children, full_path)
+            
+            extract_categories(tree)
+            st.success(f"✅ {len(category_map)} categorías cargadas")
+        else:
+            st.warning("⚠️ No se pudieron cargar categorías")
+    except Exception as e:
+        st.error(f"❌ Error cargando categorías: {e}")
+    
+    time.sleep(0.3)
+    return category_map
+
+# ====================================================================================
+# OPCIÓN 1: EXTRAER TODOS LOS PRODUCTOS (ACTIVOS E INACTIVOS)
+# ====================================================================================
+if btn_todos:
     validar_credenciales()
     
-    # ===== PASO 1: OBTENER LISTA DE TODOS LOS SKU IDs =====
-    st.info("🔄 Paso 1/6: Obteniendo lista completa de SKU IDs...")
+    # PASO 1: OBTENER CATEGORÍAS
+    category_map = obtener_categorias()
+    
+    # PASO 2: OBTENER LISTA DE TODOS LOS SKU IDs
+    st.info("🔄 Paso 1/5: Obteniendo lista completa de SKU IDs...")
     
     headers_productos = get_vtex_headers()
     all_sku_ids = []
@@ -563,7 +620,6 @@ if st.button("📥 Extraer Todos los Productos", type="primary", use_container_w
                 progress_text_skus.text(f"📄 Página {page}")
                 info_text_skus.info(f"✅ {len(sku_ids)} SKUs en esta página | Total acumulado: {len(all_sku_ids)}")
                 
-                # Si obtuvo menos SKUs que el límite, terminó
                 if len(sku_ids) < page_size:
                     info_text_skus.success("✅ Se obtuvieron todos los SKU IDs")
                     break
@@ -585,8 +641,8 @@ if st.button("📥 Extraer Todos los Productos", type="primary", use_container_w
     
     st.success(f"✅ Total de SKU IDs obtenidos: {len(all_sku_ids)}")
     
-    # ===== PASO 2: OBTENER DETALLES DE CADA SKU (CONCURRENTE) =====
-    st.info(f"🔄 Paso 2/6: Obteniendo detalles de {len(all_sku_ids)} SKUs (concurrente)...")
+    # PASO 3: OBTENER DETALLES DE CADA SKU (CONCURRENTE)
+    st.info(f"🔄 Paso 2/5: Obteniendo detalles de {len(all_sku_ids)} SKUs (concurrente)...")
     
     sku_details = []
     progress_bar_details = st.progress(0)
@@ -621,15 +677,14 @@ if st.button("📥 Extraer Todos los Productos", type="primary", use_container_w
                 sku_details.append(detail)
             completed += 1
             
-            # Actualizar progreso
             progress_pct = completed / len(all_sku_ids)
             progress_bar_details.progress(progress_pct)
             status_text_details.text(f"⏳ Procesados {completed}/{len(all_sku_ids)} SKUs")
     
     st.success(f"✅ Detalles obtenidos: {len(sku_details)} SKUs")
     
-    # ===== PASO 3: OBTENER STOCK DE CADA SKU (CONCURRENTE) =====
-    st.info(f"🔄 Paso 3/6: Obteniendo stock de {len(sku_details)} SKUs (concurrente)...")
+    # PASO 4: OBTENER STOCK DE CADA SKU (CONCURRENTE)
+    st.info(f"🔄 Paso 3/5: Obteniendo stock de {len(sku_details)} SKUs (concurrente)...")
     
     stock_data = {}
     progress_bar_stock = st.progress(0)
@@ -644,7 +699,6 @@ if st.button("📥 Extraer Todos los Productos", type="primary", use_container_w
             resp = requests.get(url, headers=headers, timeout=20)
             if resp.status_code == 200:
                 data = resp.json()
-                # Sumar balance de todos los warehouses
                 total_balance = sum([wh.get('totalQuantity', 0) for wh in data.get('balance', [])])
                 return {sku_id: total_balance}
             return {sku_id: 0}
@@ -664,51 +718,15 @@ if st.button("📥 Extraer Todos los Productos", type="primary", use_container_w
                 stock_data.update(stock_info)
             completed += 1
             
-            # Actualizar progreso
             progress_pct = completed / len(sku_details)
             progress_bar_stock.progress(progress_pct)
             status_text_stock.text(f"⏳ Procesados {completed}/{len(sku_details)} SKUs")
     
     st.success(f"✅ Stock obtenido: {len(stock_data)} SKUs")
     
-    # ===== PASO 4: OBTENER ÁRBOL DE CATEGORÍAS =====
-    st.info("🔄 Paso 4/6: Obteniendo árbol de categorías...")
+    # PASO 5: OBTENER ATRIBUTOS Y COLECCIONES DESDE ENDPOINT PÚBLICO
+    st.info(f"🔄 Paso 4/5: Obteniendo atributos y colecciones desde endpoint público...")
     
-    category_map = {}
-    headers_cat = get_vtex_headers()
-    headers_cat['Accept'] = 'application/vnd.vtex.ds.v10+json'
-    headers_cat['REST-Range'] = 'resources=0-10'
-    url_categorias = f'https://{ACCOUNT_NAME}.vtexcommercestable.com.br/api/catalog_system/pub/category/tree/10'
-    
-    try:
-        resp_cat = requests.get(url_categorias, headers=headers_cat, timeout=30)
-        if resp_cat.status_code == 200:
-            tree = resp_cat.json()
-            
-            def extract_categories(nodes, parent_path=""):
-                for node in nodes:
-                    cat_id = node.get('id')
-                    cat_name = node.get('name')
-                    full_path = f"{parent_path} > {cat_name}" if parent_path else cat_name
-                    if cat_id:
-                        category_map[cat_id] = full_path
-                    children = node.get('children', [])
-                    if children:
-                        extract_categories(children, full_path)
-            
-            extract_categories(tree)
-            st.success(f"✅ {len(category_map)} categorías cargadas")
-        else:
-            st.warning("⚠️ No se pudieron cargar categorías")
-    except Exception as e:
-        st.error(f"❌ Error cargando categorías: {e}")
-    
-    time.sleep(0.3)
-    
-    # ===== PASO 5: OBTENER ATRIBUTOS Y COLECCIONES DESDE ENDPOINT PÚBLICO (POR PRODUCT ID) =====
-    st.info(f"🔄 Paso 5/6: Obteniendo atributos y colecciones desde endpoint público...")
-    
-    # Obtener lista única de ProductIds
     unique_product_ids = list(set([d.get('ProductId') for d in sku_details if d.get('ProductId')]))
     
     product_enriched_data = {}
@@ -737,7 +755,6 @@ if st.button("📥 Extraer Todos los Productos", type="primary", use_container_w
                         else:
                             atributos[spec] = [valores]
                     
-                    # Agregar complementName si existe
                     if product.get("complementName"):
                         atributos["nombreComplementario"] = [product.get("complementName")]
                     
@@ -769,15 +786,14 @@ if st.button("📥 Extraer Todos los Productos", type="primary", use_container_w
                 product_enriched_data.update(enriched)
             completed += 1
             
-            # Actualizar progreso
             progress_pct = completed / len(unique_product_ids)
             progress_bar_enriched.progress(progress_pct)
             status_text_enriched.text(f"⏳ Procesados {completed}/{len(unique_product_ids)} productos")
     
     st.success(f"✅ Atributos y colecciones obtenidos: {len(product_enriched_data)} productos")
     
-    # ===== PASO 6: PROCESAR Y GENERAR CSV =====
-    st.info("🔄 Paso 6/6: Procesando datos y generando CSV...")
+    # PASO 6: PROCESAR Y GENERAR CSV
+    st.info("🔄 Paso 5/5: Procesando datos y generando CSV...")
     
     # Extraer todos los atributos únicos para las columnas
     all_attributes = set()
@@ -800,24 +816,16 @@ if st.button("📥 Extraer Todos los Productos", type="primary", use_container_w
         ean = detail.get('Ean', 'N/A')
         is_active = detail.get('IsActive', False)
         
-        # Obtener stock (con fallback a 0)
         available_quantity = stock_data.get(sku_id, 0)
-        
-        # Descripción
         description = detail.get('ProductDescription', '') or detail.get('Description', '')
-        
-        # Obtener categoryName del map
         category_name = category_map.get(int(category_id), 'N/A') if category_id != 'N/A' else 'N/A'
         
-        # Obtener atributos y colecciones del producto
         enriched = product_enriched_data.get(product_id, {'atributos': {}, 'colecciones': []})
         atributos = enriched['atributos']
         colecciones = enriched['colecciones']
-        
-        # Convertir colecciones a string
         colecciones_str = ", ".join(colecciones) if colecciones else 'N/A'
         
-        # Construir valores de atributos en el orden correcto
+        # Construir valores de atributos
         attr_values = []
         for a in sorted(all_attributes):
             val = atributos.get(a, [])
@@ -862,26 +870,214 @@ if st.button("📥 Extraer Todos los Productos", type="primary", use_container_w
         'total_skus': len(sku_details),
         'total_activos': sum(1 for row in productos_rows if row[11] is True),
         'total_con_stock': sum(1 for row in productos_rows if row[12] > 0),
-        'total_atributos': len(all_attributes)
+        'total_atributos': len(all_attributes),
+        'tipo_extraccion': 'TODOS'
     }
 
-# Mostrar resultados si existen datos en session_state
+# ====================================================================================
+# OPCIÓN 2: EXTRAER SOLO PRODUCTOS ACTIVOS
+# ====================================================================================
+elif btn_activos:
+    validar_credenciales()
+    
+    # PASO 1: OBTENER CATEGORÍAS
+    category_map = obtener_categorias()
+    
+    # PASO 2: FETCH PRODUCTOS ACTIVOS (ENDPOINT PÚBLICO)
+    st.info("🔄 Paso 1/2: Extrayendo productos activos desde endpoint público...")
+    
+    headers_productos = get_vtex_headers()
+    headers_productos['Accept'] = 'application/vnd.vtex.ds.v10+json'
+    
+    productos = []
+    from_index = 0
+    page_count = 0
+    productos_por_pagina = 50
+    
+    progress_text_prod = st.empty()
+    info_text_prod = st.empty()
+    
+    with st.spinner('📦 Extrayendo productos activos de VTEX...'):
+        while True:
+            page_count += 1
+            to_index = from_index + productos_por_pagina - 1
+            
+            url_productos = f'https://{ACCOUNT_NAME}.vtexcommercestable.com.br/api/catalog_system/pub/products/search?_from={from_index}&_to={to_index}'
+            
+            try:
+                resp_prod = requests.get(url_productos, headers=headers_productos, timeout=30)
+                
+                if resp_prod.status_code not in [200, 206]:
+                    st.error(f"❌ Error en página {page_count}: Status {resp_prod.status_code}")
+                    break
+                
+                products_page = resp_prod.json()
+                
+                if not products_page or len(products_page) == 0:
+                    info_text_prod.success("✅ No hay más productos para procesar")
+                    break
+                
+                productos.extend(products_page)
+                
+                progress_text_prod.text(f"📄 Página {page_count}")
+                info_text_prod.info(f"✅ {len(products_page)} productos en esta página | Total acumulado: {len(productos)}")
+                
+                if len(products_page) < productos_por_pagina:
+                    info_text_prod.success("✅ Se procesaron todos los productos activos disponibles")
+                    break
+                
+                from_index = to_index + 1
+                time.sleep(0.5)
+                
+            except requests.exceptions.Timeout:
+                st.error(f"⏱️ Timeout en página {page_count}. Reintentando...")
+                time.sleep(2)
+                continue
+            except Exception as e:
+                st.error(f"❌ Excepción en página {page_count}: {str(e)}")
+                break
+    
+    if not productos:
+        st.error("❌ No se pudieron obtener productos activos")
+        st.stop()
+    
+    # PASO 3: PROCESAR Y EXPORTAR
+    st.info("🔄 Paso 2/2: Procesando datos y generando CSVs...")
+    
+    # Extraer atributos de todos los productos
+    all_attributes = set()
+    for producto in productos:
+        atributos = {}
+        all_specs = producto.get("allSpecifications", [])
+        for spec in all_specs:
+            valores = producto.get(spec, [])
+            if isinstance(valores, list):
+                atributos[spec] = valores
+            else:
+                atributos[spec] = [valores]
+        
+        if producto.get("complementName"):
+            atributos["nombreComplementario"] = [producto.get("complementName")]
+        if producto.get("productClusters"):
+            atributos["colecciones"] = list(producto["productClusters"].values())
+        
+        producto["_atributos"] = atributos
+        all_attributes.update(atributos.keys())
+    
+    # Generar CSV de productos
+    attr_headers = [f"atributo.{a}" for a in sorted(all_attributes)]
+    
+    productos_rows = []
+    for producto in productos:
+        product_id = producto.get('productId', 'N/A')
+        product_name = producto.get('productName', 'N/A')
+        product_reference = producto.get('productReference', 'N/A')
+        brand = producto.get('brand', 'N/A')
+        category_id = producto.get('categoryId', 'N/A')
+        description = producto.get('description') or producto.get('metaTagDescription') or ''
+        category_name = category_map.get(int(category_id), 'N/A') if category_id != 'N/A' else 'N/A'
+
+        atributos = producto.get("_atributos", {})
+        
+        # Procesar SKUs
+        items = producto.get('items', [])
+        if not items:
+            attr_values = []
+            for a in sorted(all_attributes):
+                val = atributos.get(a, [])
+                if isinstance(val, list):
+                    attr_values.append(", ".join(str(v) for v in val))
+                else:
+                    attr_values.append(str(val))
+            
+            productos_rows.append([
+                product_id, product_reference, 'N/A', 'N/A', product_name,
+                (description or "")[:500], brand, category_id, category_name, 0
+            ] + attr_values)
+        else:
+            for item in items:
+                sku_id = item.get('itemId', 'N/A')
+                sku_name = item.get('name', 'N/A')
+                available_qty = 0
+                
+                for seller in item.get('sellers', []):
+                    offer = seller.get('commertialOffer', {}) or seller.get('commercialOffer', {})
+                    qty = offer.get('AvailableQuantity', 0)
+                    if isinstance(qty, (int, float)):
+                        available_qty += qty
+                
+                attr_values = []
+                for a in sorted(all_attributes):
+                    val = atributos.get(a, [])
+                    if isinstance(val, list):
+                        attr_values.append(", ".join(str(v) for v in val))
+                    else:
+                        attr_values.append(str(val))
+                
+                productos_rows.append([
+                    product_id, product_reference, sku_id, sku_name, product_name,
+                    (description or "")[:500], brand, category_id, category_name, available_qty
+                ] + attr_values)
+    
+    # Crear DataFrames y guardar en session_state
+    st.session_state.df_productos = pd.DataFrame(
+        productos_rows,
+        columns=['productId','productReference','skuId','skuName','productName',
+                'description','brand','categoryId','categoryName','availableQuantity'] + attr_headers
+    )
+    
+    # Crear DataFrame de atributos
+    atributos_info = []
+    for a in sorted(all_attributes):
+        valores = set()
+        for p in productos:
+            vals = p.get("_atributos", {}).get(a, [])
+            if vals:
+                valores.update(str(v) for v in vals)
+        atributos_info.append({
+            "atributo": f"atributo.{a}",
+            "valores_ejemplo": ", ".join(list(valores)[:10])
+        })
+    
+    st.session_state.df_atributos = pd.DataFrame(atributos_info)
+    st.session_state.productos_data = {
+        'total_productos': len(productos),
+        'total_skus': len(productos_rows),
+        'total_atributos': len(all_attributes),
+        'tipo_extraccion': 'SOLO_ACTIVOS'
+    }
+
+# ====================================================================================
+# MOSTRAR RESULTADOS SI EXISTEN DATOS EN SESSION STATE
+# ====================================================================================
 if st.session_state.df_productos is not None:
     data = st.session_state.productos_data
     df_productos = st.session_state.df_productos
     df_atributos = st.session_state.df_atributos
     
-    st.success(f"🎉 Extracción completada: {data['total_skus']} SKUs")
+    tipo_badge = "🟢 SOLO ACTIVOS" if data.get('tipo_extraccion') == 'SOLO_ACTIVOS' else "🔵 TODOS (ACTIVOS E INACTIVOS)"
     
-    col1, col2, col3, col4 = st.columns(4)
-    with col1:
-        st.metric("Total SKUs", data['total_skus'])
-    with col2:
-        st.metric("SKUs Activos", data['total_activos'])
-    with col3:
-        st.metric("SKUs con Stock", data['total_con_stock'])
-    with col4:
-        st.metric("Atributos", data['total_atributos'])
+    st.success(f"🎉 Extracción completada: {tipo_badge}")
+    
+    # Métricas según el tipo de extracción
+    if data.get('tipo_extraccion') == 'TODOS':
+        col1, col2, col3, col4 = st.columns(4)
+        with col1:
+            st.metric("Total SKUs", data['total_skus'])
+        with col2:
+            st.metric("SKUs Activos", data['total_activos'])
+        with col3:
+            st.metric("SKUs con Stock", data['total_con_stock'])
+        with col4:
+            st.metric("Atributos", data['total_atributos'])
+    else:
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.metric("Total Productos", data['total_productos'])
+        with col2:
+            st.metric("Total SKUs", data['total_skus'])
+        with col3:
+            st.metric("Atributos", data['total_atributos'])
     
     # Mostrar muestra de productos
     st.markdown("#### 👀 Muestra de los primeros 10 productos")
@@ -896,10 +1092,11 @@ if st.session_state.df_productos is not None:
     
     with col1:
         csv_productos = df_productos.to_csv(index=False, encoding='utf-8')
+        tipo_archivo = "activos" if data.get('tipo_extraccion') == 'SOLO_ACTIVOS' else "completo"
         st.download_button(
-            label="📥 Descargar CSV Completo de Productos",
+            label="📥 Descargar CSV de Productos",
             data=csv_productos,
-            file_name=f"productos_completos_vtex_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+            file_name=f"productos_{tipo_archivo}_vtex_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
             mime="text/csv",
             use_container_width=True
         )
