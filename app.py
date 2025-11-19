@@ -915,6 +915,7 @@ if st.session_state.df_productos is not None:
         )
 
 
+
 # ---------------------------------------------------------------------------------
 # CUARTO BLOQUE: EXTRACCIÓN DE VENTAS (MEJORADO Y CORREGIDO)
 # ---------------------------------------------------------------------------------
