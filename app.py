@@ -649,7 +649,40 @@ if btn_todos:
     status_text_details = st.empty()
     
     def fetch_sku_detail(sku_id):
-        """Función para obtener detalle de un SKU"""
+        """
+        Función para obtener detalle de un SKU
+        Endpoint: GET https://{account}.vtexcommercestable.com.br/api/catalog_system/pvt/sku/stockkeepingunitbyid/{skuId}
+        
+        Estructura de respuesta real (basada en la API de VTEX):
+        {
+            "Id": 29680,
+            "ProductId": 1000000234,
+            "NameComplete": "Nombre completo del SKU",
+            "SkuName": "Nombre del SKU",
+            "ProductName": "Nombre del producto",
+            "ProductDescription": "Descripción del producto",
+            "ProductRefId": "C36706",
+            "IsActive": true,
+            "BrandName": "Cole Haan",
+            "BrandId": "2000023",
+            "AlternateIds": {
+                "RefId": "C36706-36706-10"  ← El RefId está aquí
+            },
+            "ProductCategories": {
+                "276": "Zapatenis",
+                "104": "Calzados",
+                "100": "Moda"
+            },
+            "CategoriesFullPath": ["/100/104/276/"],
+            "ProductCategoryIds": "/100/104/276/",
+            "Ean": "",
+            "ProductSpecifications": [...],
+            "SkuSpecifications": [...],
+            "ProductClusterNames": {...},
+            "Images": [...],
+            ...
+        }
+        """
         url = f"https://{ACCOUNT_NAME}.vtexcommercestable.com.br/api/catalog_system/pvt/sku/stockkeepingunitbyid/{sku_id}"
         headers = get_vtex_headers()
         headers['Accept'] = 'application/vnd.vtex.ds.v10+json'
@@ -682,6 +715,11 @@ if btn_todos:
             status_text_details.text(f"⏳ Procesados {completed}/{len(all_sku_ids)} SKUs")
     
     st.success(f"✅ Detalles obtenidos: {len(sku_details)} SKUs")
+    
+    # DEBUG: Mostrar campos disponibles del primer SKU
+    if sku_details:
+        with st.expander("🔍 Ver campos disponibles (primer SKU para debug)"):
+            st.json(sku_details[0])
     
     # PASO 4: OBTENER STOCK DE CADA SKU (CONCURRENTE)
     st.info(f"🔄 Paso 3/5: Obteniendo stock de {len(sku_details)} SKUs (concurrente)...")
@@ -805,40 +843,96 @@ if btn_todos:
     productos_rows = []
     
     for detail in sku_details:
-        sku_id = detail.get('Id', 'N/A')
-        product_id = detail.get('ProductId', 'N/A')
-        sku_name = detail.get('Name', 'N/A')
-        product_name = detail.get('ProductName', 'N/A')
-        product_reference = detail.get('ProductRefId', 'N/A')
-        ref_id = detail.get('RefId', 'N/A')
-        brand_name = detail.get('BrandName', 'N/A')
-        category_id = detail.get('CategoryId', 'N/A')
-        ean = detail.get('Ean', 'N/A')
+        # Datos del SKU desde el endpoint privado
+        sku_id = detail.get('Id')
+        product_id = detail.get('ProductId')
+        
+        # Nombres - el endpoint trae NameComplete y SkuName
+        sku_name = detail.get('SkuName') or detail.get('NameComplete') or ''
+        product_name = detail.get('ProductName') or ''
+        
+        # Referencias - ProductRefId está en el nivel superior
+        product_reference = detail.get('ProductRefId') or ''
+        
+        # RefId está dentro de AlternateIds
+        alternate_ids = detail.get('AlternateIds', {})
+        ref_id = alternate_ids.get('RefId', '') if isinstance(alternate_ids, dict) else ''
+        
+        # Marca
+        brand_name = detail.get('BrandName') or ''
+        
+        # Categoría - extraer del ProductCategories o ProductCategoryIds
+        product_categories = detail.get('ProductCategories', {})
+        category_id = ''
+        category_name = ''
+        
+        if product_categories:
+            # Obtener la última categoría (más específica)
+            # ProductCategories es un dict con keys de category_id y values de nombres
+            if isinstance(product_categories, dict) and product_categories:
+                # Obtener el último (más específico)
+                last_cat_id = list(product_categories.keys())[-1]
+                category_id = last_cat_id
+                category_name = product_categories[last_cat_id]
+        
+        # Si no hay ProductCategories, intentar con CategoriesFullPath
+        if not category_id:
+            categories_full_path = detail.get('CategoriesFullPath', [])
+            if categories_full_path:
+                # Tomar el primer path y extraer la última categoría
+                first_path = categories_full_path[0]
+                # Formato: "/100/104/276/"
+                cat_ids = [c for c in first_path.split('/') if c]
+                if cat_ids:
+                    category_id = cat_ids[-1]
+                    # Buscar nombre en el mapa
+                    try:
+                        category_name = category_map.get(int(category_id), '')
+                    except:
+                        category_name = ''
+        
+        # EAN
+        ean = detail.get('Ean', '')
+        
+        # Estado activo
         is_active = detail.get('IsActive', False)
         
+        # Stock
         available_quantity = stock_data.get(sku_id, 0)
-        description = detail.get('ProductDescription', '') or detail.get('Description', '')
-        category_name = category_map.get(int(category_id), 'N/A') if category_id != 'N/A' else 'N/A'
         
+        # Descripción
+        description = detail.get('ProductDescription') or detail.get('Description') or detail.get('ModalType') or ''
+        
+        # Datos enriquecidos del producto desde endpoint público
         enriched = product_enriched_data.get(product_id, {'atributos': {}, 'colecciones': []})
         atributos = enriched['atributos']
         colecciones = enriched['colecciones']
-        colecciones_str = ", ".join(colecciones) if colecciones else 'N/A'
+        colecciones_str = ", ".join(colecciones) if colecciones else ''
         
         # Construir valores de atributos
         attr_values = []
         for a in sorted(all_attributes):
             val = atributos.get(a, [])
             if isinstance(val, list):
-                attr_values.append(", ".join(str(v) for v in val))
+                attr_values.append(", ".join(str(v) for v in val) if val else '')
             else:
-                attr_values.append(str(val))
+                attr_values.append(str(val) if val else '')
         
         productos_rows.append([
-            product_id, product_reference, sku_id, ref_id, sku_name,
-            product_name, description[:500] if description else '', 
-            brand_name, category_id, category_name, ean, is_active, 
-            available_quantity, colecciones_str
+            product_id or '', 
+            product_reference, 
+            sku_id or '', 
+            ref_id, 
+            sku_name,
+            product_name, 
+            description[:500] if description else '', 
+            brand_name, 
+            category_id or '', 
+            category_name, 
+            ean, 
+            is_active, 
+            available_quantity, 
+            colecciones_str
         ] + attr_values)
     
     # Crear DataFrame y guardar en session_state
@@ -1110,7 +1204,6 @@ if st.session_state.df_productos is not None:
             mime="text/csv",
             use_container_width=True
         )
-
 
 
 # ---------------------------------------------------------------------------------
