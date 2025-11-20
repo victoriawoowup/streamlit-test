@@ -499,7 +499,7 @@ if st.session_state.df_clientes is not None:
     )
 
 # ---------------------------------------------------------------------------------
-# TERCER BLOQUE: EXTRACCIÓN DE PRODUCTOS (VERSIÓN DUAL CORREGIDA)
+# TERCER BLOQUE: EXTRACCIÓN DE PRODUCTOS (VERSIÓN DUAL CORREGIDA CON PRECIOS)
 # ---------------------------------------------------------------------------------
 st.markdown("---")
 st.markdown("---")
@@ -530,7 +530,7 @@ col_btn1, col_btn2 = st.columns(2)
 
 with col_btn1:
     btn_todos = st.button("📥 Extraer TODOS los Productos", type="primary", use_container_width=True,
-                          help="Extrae todos los SKUs (activos e inactivos) usando el endpoint completo")
+                          help="Extrae todos los SKUs (activos e inactivos) con stock y precio")
 
 with col_btn2:
     btn_activos = st.button("✅ Extraer Solo ACTIVOS", type="secondary", use_container_width=True,
@@ -576,25 +576,27 @@ def obtener_categorias():
     return category_map
 
 # ====================================================================================
-# OPCIÓN 1: EXTRAER TODOS LOS PRODUCTOS (ACTIVOS E INACTIVOS)
+# OPCIÓN 1: EXTRAER TODOS LOS PRODUCTOS (FLUJO COMPLETO DE 4 PASOS)
 # ====================================================================================
 if btn_todos:
     validar_credenciales()
     
-    # PASO 1: OBTENER CATEGORÍAS
+    # PASO 0: OBTENER CATEGORÍAS
     category_map = obtener_categorias()
     
-    # PASO 2: OBTENER LISTA DE TODOS LOS SKU IDs
-    st.info("🔄 Paso 1/5: Obteniendo lista completa de SKU IDs...")
+    # ========== PASO 1: LISTAR TODOS LOS SKU IDs ==========
+    st.info("🔄 PASO 1/4: Listando todos los SKU IDs...")
     
     headers_productos = get_vtex_headers()
+    headers_productos['Accept'] = 'application/json'
+    
     all_sku_ids = []
     page = 1
     
     progress_text_skus = st.empty()
     info_text_skus = st.empty()
     
-    with st.spinner('📋 Listando todos los SKU IDs...'):
+    with st.spinner('📋 Obteniendo SKU IDs...'):
         while True:
             url_sku_list = f'https://{ACCOUNT_NAME}.vtexcommercestable.com.br/api/catalog_system/pvt/sku/stockkeepingunitids'
             params = {
@@ -607,73 +609,65 @@ if btn_todos:
                 
                 if resp.status_code != 200:
                     st.error(f"❌ Error obteniendo SKU IDs en página {page}: Status {resp.status_code}")
-                    with st.expander("Ver detalle del error"):
-                        st.code(resp.text[:500])
                     break
                 
                 sku_ids = resp.json()
                 
                 if not sku_ids or len(sku_ids) == 0:
-                    info_text_skus.success("✅ Se obtuvieron todos los SKU IDs")
+                    info_text_skus.success("✅ Todos los SKU IDs obtenidos")
                     break
                 
                 all_sku_ids.extend(sku_ids)
                 
                 progress_text_skus.text(f"📄 Página {page}")
-                info_text_skus.info(f"✅ {len(sku_ids)} SKUs en esta página | Total acumulado: {len(all_sku_ids)}")
+                info_text_skus.info(f"✅ {len(sku_ids)} SKUs | Total: {len(all_sku_ids)}")
                 
                 if len(sku_ids) < page_size:
-                    info_text_skus.success("✅ Se obtuvieron todos los SKU IDs")
                     break
                 
                 page += 1
                 time.sleep(delay_between_pages)
                 
-            except requests.exceptions.Timeout:
-                st.error(f"⏱️ Timeout en página {page}. Reintentando...")
-                time.sleep(2)
-                continue
             except Exception as e:
-                st.error(f"❌ Excepción obteniendo SKU IDs en página {page}: {str(e)}")
+                st.error(f"❌ Error en página {page}: {str(e)}")
                 break
     
     if not all_sku_ids:
-        st.error("❌ No se pudo obtener ningún SKU ID")
+        st.error("❌ No se obtuvieron SKU IDs")
         st.stop()
     
-    st.success(f"✅ Total de SKU IDs obtenidos: {len(all_sku_ids)}")
+    st.success(f"✅ PASO 1 COMPLETADO: {len(all_sku_ids)} SKU IDs obtenidos")
     
-    # PASO 3: OBTENER DETALLES DE CADA SKU (CONCURRENTE CON RATE LIMITING)
-    st.info(f"🔄 Paso 2/5: Obteniendo detalles de {len(all_sku_ids)} SKUs (concurrente)...")
-    
-    sku_details = []
-    progress_bar_details = st.progress(0)
-    status_text_details = st.empty()
-    error_count = 0
-    
+    # ========== CONFIGURAR RATE LIMITING ==========
     import threading
     from queue import Queue
+    from concurrent.futures import ThreadPoolExecutor, as_completed
     
-    # Rate limiter: máximo 10 requests por segundo
     rate_limit_lock = threading.Lock()
     last_request_times = Queue(maxsize=10)
     
     def rate_limited_request():
-        """Implementa rate limiting de ~10 req/s"""
+        """Rate limiting de ~10 req/s"""
         with rate_limit_lock:
             current_time = time.time()
-            
             if last_request_times.full():
                 oldest_time = last_request_times.get()
                 time_diff = current_time - oldest_time
                 if time_diff < 1.0:
                     time.sleep(1.0 - time_diff)
                 current_time = time.time()
-            
             last_request_times.put(current_time)
     
+    # ========== PASO 2: OBTENER DETALLES DE CADA SKU ==========
+    st.info(f"🔄 PASO 2/4: Obteniendo detalles de {len(all_sku_ids)} SKUs...")
+    
+    sku_details = []
+    progress_bar_details = st.progress(0)
+    status_text_details = st.empty()
+    error_count_details = 0
+    
     def fetch_sku_detail(sku_id):
-        """Función para obtener detalle de un SKU con rate limiting"""
+        """PASO 2: Obtener detalle del SKU"""
         rate_limited_request()
         
         url = f"https://{ACCOUNT_NAME}.vtexcommercestable.com.br/api/catalog_system/pvt/sku/stockkeepingunitbyid/{sku_id}"
@@ -690,22 +684,15 @@ if btn_todos:
                     time.sleep(2 ** attempt)
                     continue
                 return None
-            except requests.exceptions.Timeout:
+            except:
                 if attempt < max_retries - 1:
                     time.sleep(1)
                     continue
                 return None
-            except:
-                return None
         return None
     
-    from concurrent.futures import ThreadPoolExecutor, as_completed
-    
     with ThreadPoolExecutor(max_workers=max_workers_productos) as executor:
-        future_to_sku = {
-            executor.submit(fetch_sku_detail, sku_id): sku_id 
-            for sku_id in all_sku_ids
-        }
+        future_to_sku = {executor.submit(fetch_sku_detail, sku_id): sku_id for sku_id in all_sku_ids}
         
         completed = 0
         for future in as_completed(future_to_sku):
@@ -713,71 +700,127 @@ if btn_todos:
             if detail:
                 sku_details.append(detail)
             else:
-                error_count += 1
+                error_count_details += 1
             completed += 1
             
-            progress_pct = completed / len(all_sku_ids)
-            progress_bar_details.progress(progress_pct)
-            status_text_details.text(f"⏳ Procesados {completed}/{len(all_sku_ids)} SKUs | ❌ Errores: {error_count}")
+            progress_bar_details.progress(completed / len(all_sku_ids))
+            status_text_details.text(f"⏳ {completed}/{len(all_sku_ids)} SKUs | ❌ {error_count_details} errores")
     
-    st.success(f"✅ Detalles obtenidos: {len(sku_details)} SKUs | ❌ Errores: {error_count}")
+    st.success(f"✅ PASO 2 COMPLETADO: {len(sku_details)} detalles obtenidos | ❌ {error_count_details} errores")
     
-    # PASO 4: OBTENER STOCK DE CADA SKU (CONCURRENTE CON RATE LIMITING)
-    st.info(f"🔄 Paso 3/5: Obteniendo stock de {len(sku_details)} SKUs (concurrente)...")
+    # ========== PASO 3: OBTENER STOCK DE CADA SKU ==========
+    st.info(f"🔄 PASO 3/4: Obteniendo stock de {len(sku_details)} SKUs...")
     
     stock_data = {}
     progress_bar_stock = st.progress(0)
     status_text_stock = st.empty()
+    error_count_stock = 0
     
     def fetch_sku_stock(sku_id):
-        """Función para obtener stock de un SKU con rate limiting"""
+        """PASO 3: Obtener stock del SKU (si falla, retorna 0)"""
         rate_limited_request()
         
         url = f"https://{ACCOUNT_NAME}.vtexcommercestable.com.br/api/logistics/pvt/inventory/skus/{sku_id}"
         headers = get_vtex_headers()
+        headers['Accept'] = 'application/json'
         
-        max_retries = 3
+        max_retries = 2
         for attempt in range(max_retries):
             try:
-                resp = requests.get(url, headers=headers, timeout=15)
+                resp = requests.get(url, headers=headers, timeout=10)
                 if resp.status_code == 200:
                     data = resp.json()
                     total_balance = sum([wh.get('totalQuantity', 0) for wh in data.get('balance', [])])
                     return {sku_id: total_balance}
                 elif resp.status_code == 429:
-                    time.sleep(2 ** attempt)
-                    continue
-                return {sku_id: 0}
-            except requests.exceptions.Timeout:
-                if attempt < max_retries - 1:
                     time.sleep(1)
                     continue
-                return {sku_id: 0}
+                return {sku_id: 0}  # Si falla, retorna 0
             except:
-                return {sku_id: 0}
+                if attempt < max_retries - 1:
+                    time.sleep(0.5)
+                    continue
+                return {sku_id: 0}  # Si falla, retorna 0
         return {sku_id: 0}
     
     with ThreadPoolExecutor(max_workers=max_workers_productos) as executor:
-        future_to_sku_stock = {
-            executor.submit(fetch_sku_stock, detail.get('Id')): detail.get('Id') 
-            for detail in sku_details if detail.get('Id')
-        }
+        future_to_sku_stock = {executor.submit(fetch_sku_stock, d.get('Id')): d.get('Id') for d in sku_details if d.get('Id')}
         
         completed = 0
         for future in as_completed(future_to_sku_stock):
             stock_info = future.result()
             if stock_info:
                 stock_data.update(stock_info)
+                if list(stock_info.values())[0] == 0:
+                    error_count_stock += 1
             completed += 1
             
-            progress_pct = completed / len(sku_details)
-            progress_bar_stock.progress(progress_pct)
-            status_text_stock.text(f"⏳ Procesados {completed}/{len(sku_details)} SKUs")
+            progress_bar_stock.progress(completed / len(sku_details))
+            status_text_stock.text(f"⏳ {completed}/{len(sku_details)} SKUs | ⚠️ {error_count_stock} sin stock o con error")
     
-    st.success(f"✅ Stock obtenido: {len(stock_data)} SKUs")
+    st.success(f"✅ PASO 3 COMPLETADO: {len(stock_data)} stocks obtenidos | ⚠️ {error_count_stock} en 0 o error")
     
-    # PASO 5: OBTENER ATRIBUTOS Y COLECCIONES DESDE ENDPOINT PÚBLICO
-    st.info(f"🔄 Paso 4/5: Obteniendo atributos y colecciones desde endpoint público...")
+    # ========== PASO 4: OBTENER PRECIO DE CADA SKU ==========
+    st.info(f"🔄 PASO 4/4: Obteniendo precios de {len(sku_details)} SKUs...")
+    
+    price_data = {}
+    progress_bar_price = st.progress(0)
+    status_text_price = st.empty()
+    error_count_price = 0
+    
+    def fetch_sku_price(sku_id):
+        """PASO 4: Obtener precio del SKU (si falla, retorna 0)"""
+        rate_limited_request()
+        
+        url = f"https://{ACCOUNT_NAME}.vtexcommercestable.com.br/api/pricing/prices/{sku_id}"
+        headers = get_vtex_headers()
+        headers['Accept'] = 'application/json'
+        
+        max_retries = 2
+        for attempt in range(max_retries):
+            try:
+                resp = requests.get(url, headers=headers, timeout=10)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    # Obtener el precio base o el precio de lista
+                    base_price = data.get('basePrice', 0)
+                    list_price = data.get('listPrice', 0)
+                    cost_price = data.get('costPrice', 0)
+                    
+                    # Prioridad: basePrice > listPrice > costPrice
+                    price = base_price or list_price or cost_price or 0
+                    
+                    return {sku_id: price}
+                elif resp.status_code == 429:
+                    time.sleep(1)
+                    continue
+                return {sku_id: 0}  # Si falla, retorna 0
+            except:
+                if attempt < max_retries - 1:
+                    time.sleep(0.5)
+                    continue
+                return {sku_id: 0}  # Si falla, retorna 0
+        return {sku_id: 0}
+    
+    with ThreadPoolExecutor(max_workers=max_workers_productos) as executor:
+        future_to_sku_price = {executor.submit(fetch_sku_price, d.get('Id')): d.get('Id') for d in sku_details if d.get('Id')}
+        
+        completed = 0
+        for future in as_completed(future_to_sku_price):
+            price_info = future.result()
+            if price_info:
+                price_data.update(price_info)
+                if list(price_info.values())[0] == 0:
+                    error_count_price += 1
+            completed += 1
+            
+            progress_bar_price.progress(completed / len(sku_details))
+            status_text_price.text(f"⏳ {completed}/{len(sku_details)} SKUs | ⚠️ {error_count_price} sin precio o con error")
+    
+    st.success(f"✅ PASO 4 COMPLETADO: {len(price_data)} precios obtenidos | ⚠️ {error_count_price} en 0 o error")
+    
+    # ========== PASO EXTRA: OBTENER ATRIBUTOS Y COLECCIONES ==========
+    st.info(f"🔄 Paso extra: Obteniendo atributos y colecciones...")
     
     unique_product_ids = list(set([d.get('ProductId') for d in sku_details if d.get('ProductId')]))
     
@@ -786,13 +829,13 @@ if btn_todos:
     status_text_enriched = st.empty()
     
     def fetch_product_public(product_id):
-        """Función para obtener info pública del producto con rate limiting"""
+        """Obtener atributos y colecciones desde endpoint público"""
         rate_limited_request()
         
         url = f"https://{ACCOUNT_NAME}.vtexcommercestable.com.br/api/catalog_system/pub/products/search?fq=productId:{product_id}"
         headers = get_vtex_headers()
         
-        max_retries = 3
+        max_retries = 2
         for attempt in range(max_retries):
             try:
                 resp = requests.get(url, headers=headers, timeout=15)
@@ -801,7 +844,6 @@ if btn_todos:
                     if data and len(data) > 0:
                         product = data[0]
                         
-                        # Extraer atributos
                         atributos = {}
                         all_specs = product.get("allSpecifications", [])
                         for spec in all_specs:
@@ -814,23 +856,12 @@ if btn_todos:
                         if product.get("complementName"):
                             atributos["nombreComplementario"] = [product.get("complementName")]
                         
-                        # Extraer colecciones
                         colecciones = []
                         if product.get("productClusters"):
                             colecciones = list(product["productClusters"].values())
                         
-                        return {
-                            product_id: {
-                                'atributos': atributos,
-                                'colecciones': colecciones
-                            }
-                        }
+                        return {product_id: {'atributos': atributos, 'colecciones': colecciones}}
                 elif resp.status_code == 429:
-                    time.sleep(2 ** attempt)
-                    continue
-                return {product_id: {'atributos': {}, 'colecciones': []}}
-            except requests.exceptions.Timeout:
-                if attempt < max_retries - 1:
                     time.sleep(1)
                     continue
                 return {product_id: {'atributos': {}, 'colecciones': []}}
@@ -839,10 +870,7 @@ if btn_todos:
         return {product_id: {'atributos': {}, 'colecciones': []}}
     
     with ThreadPoolExecutor(max_workers=max_workers_productos) as executor:
-        future_to_product = {
-            executor.submit(fetch_product_public, prod_id): prod_id 
-            for prod_id in unique_product_ids
-        }
+        future_to_product = {executor.submit(fetch_product_public, prod_id): prod_id for prod_id in unique_product_ids}
         
         completed = 0
         for future in as_completed(future_to_product):
@@ -851,16 +879,14 @@ if btn_todos:
                 product_enriched_data.update(enriched)
             completed += 1
             
-            progress_pct = completed / len(unique_product_ids)
-            progress_bar_enriched.progress(progress_pct)
-            status_text_enriched.text(f"⏳ Procesados {completed}/{len(unique_product_ids)} productos")
+            progress_bar_enriched.progress(completed / len(unique_product_ids))
+            status_text_enriched.text(f"⏳ {completed}/{len(unique_product_ids)} productos")
     
-    st.success(f"✅ Atributos y colecciones obtenidos: {len(product_enriched_data)} productos")
+    st.success(f"✅ Atributos obtenidos: {len(product_enriched_data)} productos")
     
-    # PASO 6: PROCESAR Y GENERAR CSV
-    st.info("🔄 Paso 5/5: Procesando datos y generando CSV...")
+    # ========== PROCESAR Y GENERAR CSV ==========
+    st.info("🔄 Procesando datos y generando CSV...")
     
-    # Extraer todos los atributos únicos para las columnas
     all_attributes = set()
     for prod_data in product_enriched_data.values():
         all_attributes.update(prod_data['atributos'].keys())
@@ -873,10 +899,8 @@ if btn_todos:
         sku_id = detail.get('Id')
         product_id = detail.get('ProductId')
         
-        # CORRECCIÓN 1: ProductRefId está en el nivel superior del SKU detail
+        # Referencias
         product_reference = detail.get('ProductRefId', '')
-        
-        # CORRECCIÓN 2: RefId del SKU está en AlternateIds
         alternate_ids = detail.get('AlternateIds', {})
         ref_id = alternate_ids.get('RefId', '') if isinstance(alternate_ids, dict) else ''
         
@@ -887,55 +911,46 @@ if btn_todos:
         # Marca
         brand_name = detail.get('BrandName') or ''
         
-        # CORRECCIÓN 3: Construcción correcta del árbol de categorías
+        # Categoría con árbol completo
         category_id = ''
         category_name = ''
         
-        # Primero intentar con ProductCategories (dict con id: nombre)
         product_categories = detail.get('ProductCategories', {})
         if product_categories and isinstance(product_categories, dict):
-            # Obtener la categoría más específica (última en el dict)
             cat_ids_list = list(product_categories.keys())
             if cat_ids_list:
                 category_id = cat_ids_list[-1]
-                # Buscar en el mapa de categorías para obtener el path completo
                 try:
                     category_name = category_map.get(int(category_id), product_categories[category_id])
                 except:
                     category_name = product_categories[category_id]
         
-        # Si no hay ProductCategories, intentar con ProductCategoryIds
         if not category_id:
             product_category_ids = detail.get('ProductCategoryIds', '')
             if product_category_ids:
-                # Formato: "/100/104/276/"
                 cat_ids = [c for c in product_category_ids.split('/') if c]
                 if cat_ids:
-                    category_id = cat_ids[-1]  # Última categoría (más específica)
+                    category_id = cat_ids[-1]
                     try:
                         category_name = category_map.get(int(category_id), '')
                     except:
                         category_name = ''
         
-        # EAN
+        # Otros campos
         ean = detail.get('Ean', '')
-        
-        # Estado activo
         is_active = detail.get('IsActive', False)
-        
-        # CORRECCIÓN 4: Stock correcto desde el endpoint de logistics
-        available_quantity = stock_data.get(sku_id, 0)
-        
-        # Descripción
         description = detail.get('ProductDescription') or detail.get('Description') or detail.get('ModalType') or ''
         
-        # Datos enriquecidos del producto
+        # Stock y Precio
+        available_quantity = stock_data.get(sku_id, 0)
+        price = price_data.get(sku_id, 0)
+        
+        # Atributos y colecciones
         enriched = product_enriched_data.get(product_id, {'atributos': {}, 'colecciones': []})
         atributos = enriched['atributos']
         colecciones = enriched['colecciones']
         colecciones_str = ", ".join(colecciones) if colecciones else ''
         
-        # Construir valores de atributos
         attr_values = []
         for a in sorted(all_attributes):
             val = atributos.get(a, [])
@@ -957,17 +972,18 @@ if btn_todos:
             category_name, 
             ean, 
             is_active, 
-            available_quantity, 
+            available_quantity,
+            price,
             colecciones_str
         ] + attr_values)
     
-    # Crear DataFrame y guardar en session_state
+    # Crear DataFrame
     st.session_state.df_productos = pd.DataFrame(
         productos_rows,
         columns=[
             'productId', 'productReference', 'skuId', 'skuRefId', 'skuName',
             'productName', 'description', 'brandName', 'categoryId', 'categoryName', 
-            'ean', 'isActive', 'availableQuantity', 'colecciones'
+            'ean', 'isActive', 'availableQuantity', 'price', 'colecciones'
         ] + attr_headers
     )
     
@@ -990,6 +1006,7 @@ if btn_todos:
         'total_skus': len(sku_details),
         'total_activos': sum(1 for row in productos_rows if row[11] is True),
         'total_con_stock': sum(1 for row in productos_rows if row[12] > 0),
+        'total_con_precio': sum(1 for row in productos_rows if row[13] > 0),
         'total_atributos': len(all_attributes),
         'tipo_extraccion': 'TODOS'
     }
@@ -1000,11 +1017,9 @@ if btn_todos:
 elif btn_activos:
     validar_credenciales()
     
-    # PASO 1: OBTENER CATEGORÍAS
     category_map = obtener_categorias()
     
-    # PASO 2: FETCH PRODUCTOS ACTIVOS (ENDPOINT PÚBLICO)
-    st.info("🔄 Paso 1/2: Extrayendo productos activos desde endpoint público...")
+    st.info("🔄 Paso 1/2: Extrayendo productos activos...")
     
     headers_productos = get_vtex_headers()
     headers_productos['Accept'] = 'application/vnd.vtex.ds.v10+json'
@@ -1017,7 +1032,7 @@ elif btn_activos:
     progress_text_prod = st.empty()
     info_text_prod = st.empty()
     
-    with st.spinner('📦 Extrayendo productos activos de VTEX...'):
+    with st.spinner('📦 Extrayendo productos activos...'):
         while True:
             page_count += 1
             to_index = from_index + productos_por_pagina - 1
@@ -1034,37 +1049,30 @@ elif btn_activos:
                 products_page = resp_prod.json()
                 
                 if not products_page or len(products_page) == 0:
-                    info_text_prod.success("✅ No hay más productos para procesar")
+                    info_text_prod.success("✅ No hay más productos")
                     break
                 
                 productos.extend(products_page)
                 
                 progress_text_prod.text(f"📄 Página {page_count}")
-                info_text_prod.info(f"✅ {len(products_page)} productos en esta página | Total acumulado: {len(productos)}")
+                info_text_prod.info(f"✅ {len(products_page)} productos | Total: {len(productos)}")
                 
                 if len(products_page) < productos_por_pagina:
-                    info_text_prod.success("✅ Se procesaron todos los productos activos disponibles")
                     break
                 
                 from_index = to_index + 1
                 time.sleep(0.5)
                 
-            except requests.exceptions.Timeout:
-                st.error(f"⏱️ Timeout en página {page_count}. Reintentando...")
-                time.sleep(2)
-                continue
             except Exception as e:
-                st.error(f"❌ Excepción en página {page_count}: {str(e)}")
+                st.error(f"❌ Error en página {page_count}: {str(e)}")
                 break
     
     if not productos:
-        st.error("❌ No se pudieron obtener productos activos")
+        st.error("❌ No se obtuvieron productos activos")
         st.stop()
     
-    # PASO 3: PROCESAR Y EXPORTAR
-    st.info("🔄 Paso 2/2: Procesando datos y generando CSVs...")
+    st.info("🔄 Paso 2/2: Procesando datos...")
     
-    # Extraer atributos de todos los productos
     all_attributes = set()
     for producto in productos:
         atributos = {}
@@ -1082,7 +1090,6 @@ elif btn_activos:
         producto["_atributos"] = atributos
         all_attributes.update(atributos.keys())
     
-    # Generar CSV de productos
     attr_headers = [f"atributo.{a}" for a in sorted(all_attributes)]
     
     productos_rows = []
@@ -1093,19 +1100,15 @@ elif btn_activos:
         brand = producto.get('brand', 'N/A')
         category_id = producto.get('categoryId', 'N/A')
         description = producto.get('description') or producto.get('metaTagDescription') or ''
-        
-        # Construir árbol de categoría
         category_name = category_map.get(int(category_id), 'N/A') if category_id != 'N/A' else 'N/A'
         
         atributos = producto.get("_atributos", {})
         
-        # Extraer colecciones
         colecciones = []
         if producto.get("productClusters"):
             colecciones = list(producto["productClusters"].values())
         colecciones_str = ", ".join(colecciones) if colecciones else ''
         
-        # Procesar SKUs
         items = producto.get('items', [])
         if not items:
             attr_values = []
@@ -1118,27 +1121,32 @@ elif btn_activos:
             
             productos_rows.append([
                 product_id, product_reference, 'N/A', '', '', product_name,
-                (description or "")[:500], brand, category_id, category_name, 0, colecciones_str
+                (description or "")[:500], brand, category_id, category_name, 0, 0, colecciones_str
             ] + attr_values)
         else:
             for item in items:
                 sku_id = item.get('itemId', 'N/A')
                 sku_name = item.get('name', 'N/A')
                 
-                # Extraer refId del SKU
                 ref_id = ''
                 if item.get('referenceId'):
                     ref_id_list = item.get('referenceId', [])
                     if ref_id_list and len(ref_id_list) > 0:
                         ref_id = ref_id_list[0].get('Value', '')
                 
-                # Calcular stock disponible
                 available_qty = 0
+                price = 0
+                
                 for seller in item.get('sellers', []):
                     offer = seller.get('commertialOffer', {}) or seller.get('commercialOffer', {})
                     qty = offer.get('AvailableQuantity', 0)
                     if isinstance(qty, (int, float)):
                         available_qty += qty
+                    
+                    # Obtener precio
+                    offer_price = offer.get('Price', 0) or offer.get('ListPrice', 0)
+                    if offer_price > price:
+                        price = offer_price
                 
                 attr_values = []
                 for a in sorted(all_attributes):
@@ -1150,14 +1158,14 @@ elif btn_activos:
                 
                 productos_rows.append([
                     product_id, product_reference, sku_id, ref_id, sku_name, product_name,
-                    (description or "")[:500], brand, category_id, category_name, available_qty, colecciones_str
+                    (description or "")[:500], brand, category_id, category_name, available_qty, price, colecciones_str
                 ] + attr_values)
     
-    # Crear DataFrames y guardar en session_state
+    # Crear DataFrames
     st.session_state.df_productos = pd.DataFrame(
         productos_rows,
         columns=['productId','productReference','skuId','skuRefId','skuName','productName',
-                'description','brand','categoryId','categoryName','availableQuantity','colecciones'] + attr_headers
+                'description','brand','categoryId','categoryName','availableQuantity','price','colecciones'] + attr_headers
     )
     
     # Crear DataFrame de atributos
@@ -1177,6 +1185,8 @@ elif btn_activos:
     st.session_state.productos_data = {
         'total_productos': len(productos),
         'total_skus': len(productos_rows),
+        'total_con_stock': sum(1 for row in productos_rows if row[10] > 0),
+        'total_con_precio': sum(1 for row in productos_rows if row[11] > 0),
         'total_atributos': len(all_attributes),
         'tipo_extraccion': 'SOLO_ACTIVOS'
     }
@@ -1195,23 +1205,52 @@ if st.session_state.df_productos is not None:
     
     # Métricas según el tipo de extracción
     if data.get('tipo_extraccion') == 'TODOS':
-        col1, col2, col3, col4 = st.columns(4)
+        col1, col2, col3, col4, col5 = st.columns(5)
         with col1:
             st.metric("Total SKUs", data['total_skus'])
         with col2:
             st.metric("SKUs Activos", data['total_activos'])
         with col3:
-            st.metric("SKUs con Stock", data['total_con_stock'])
+            st.metric("Con Stock", data['total_con_stock'])
         with col4:
+            st.metric("Con Precio", data['total_con_precio'])
+        with col5:
             st.metric("Atributos", data['total_atributos'])
     else:
-        col1, col2, col3 = st.columns(3)
+        col1, col2, col3, col4, col5 = st.columns(5)
         with col1:
-            st.metric("Total Productos", data['total_productos'])
+            st.metric("Productos", data['total_productos'])
         with col2:
             st.metric("Total SKUs", data['total_skus'])
         with col3:
+            st.metric("Con Stock", data['total_con_stock'])
+        with col4:
+            st.metric("Con Precio", data['total_con_precio'])
+        with col5:
             st.metric("Atributos", data['total_atributos'])
+    
+    # Análisis de datos
+    with st.expander("📊 Análisis de Datos"):
+        st.markdown("### Estadísticas de Stock")
+        col1, col2 = st.columns(2)
+        with col1:
+            total_stock = df_productos['availableQuantity'].sum()
+            st.metric("Stock Total", f"{total_stock:,.0f}")
+        with col2:
+            avg_stock = df_productos[df_productos['availableQuantity'] > 0]['availableQuantity'].mean()
+            st.metric("Stock Promedio", f"{avg_stock:,.1f}" if not pd.isna(avg_stock) else "0")
+        
+        st.markdown("### Estadísticas de Precio")
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            avg_price = df_productos[df_productos['price'] > 0]['price'].mean()
+            st.metric("Precio Promedio", f"${avg_price:,.2f}" if not pd.isna(avg_price) else "$0.00")
+        with col2:
+            min_price = df_productos[df_productos['price'] > 0]['price'].min()
+            st.metric("Precio Mínimo", f"${min_price:,.2f}" if not pd.isna(min_price) else "$0.00")
+        with col3:
+            max_price = df_productos['price'].max()
+            st.metric("Precio Máximo", f"${max_price:,.2f}" if not pd.isna(max_price) else "$0.00")
     
     # Mostrar muestra de productos
     st.markdown("#### 👀 Muestra de los primeros 10 productos")
