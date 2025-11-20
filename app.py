@@ -819,8 +819,8 @@ if btn_todos:
     
     st.success(f"✅ PASO 4 COMPLETADO: {len(price_data)} precios obtenidos | ⚠️ {error_count_price} en 0 o error")
     
-    # ========== PASO EXTRA: OBTENER ATRIBUTOS Y COLECCIONES ==========
-    st.info(f"🔄 Paso extra: Obteniendo atributos y colecciones...")
+    # ========== PASO EXTRA: OBTENER ATRIBUTOS, COLECCIONES Y PRODUCTREFERENCE FALTANTE ==========
+    st.info(f"🔄 Paso extra: Obteniendo atributos, colecciones y completando datos...")
     
     unique_product_ids = list(set([d.get('ProductId') for d in sku_details if d.get('ProductId')]))
     
@@ -829,7 +829,7 @@ if btn_todos:
     status_text_enriched = st.empty()
     
     def fetch_product_public(product_id):
-        """Obtener atributos y colecciones desde endpoint público"""
+        """Obtener atributos, colecciones y productReference desde endpoint público"""
         rate_limited_request()
         
         url = f"https://{ACCOUNT_NAME}.vtexcommercestable.com.br/api/catalog_system/pub/products/search?fq=productId:{product_id}"
@@ -844,6 +844,10 @@ if btn_todos:
                     if data and len(data) > 0:
                         product = data[0]
                         
+                        # Extraer productReference (fallback si el endpoint privado no lo trae)
+                        product_reference = product.get('productReference', '')
+                        
+                        # Extraer atributos
                         atributos = {}
                         all_specs = product.get("allSpecifications", [])
                         for spec in all_specs:
@@ -856,18 +860,25 @@ if btn_todos:
                         if product.get("complementName"):
                             atributos["nombreComplementario"] = [product.get("complementName")]
                         
+                        # Extraer colecciones
                         colecciones = []
                         if product.get("productClusters"):
                             colecciones = list(product["productClusters"].values())
                         
-                        return {product_id: {'atributos': atributos, 'colecciones': colecciones}}
+                        return {
+                            product_id: {
+                                'atributos': atributos, 
+                                'colecciones': colecciones,
+                                'productReference': product_reference
+                            }
+                        }
                 elif resp.status_code == 429:
                     time.sleep(1)
                     continue
-                return {product_id: {'atributos': {}, 'colecciones': []}}
+                return {product_id: {'atributos': {}, 'colecciones': [], 'productReference': ''}}
             except:
-                return {product_id: {'atributos': {}, 'colecciones': []}}
-        return {product_id: {'atributos': {}, 'colecciones': []}}
+                return {product_id: {'atributos': {}, 'colecciones': [], 'productReference': ''}}
+        return {product_id: {'atributos': {}, 'colecciones': [], 'productReference': ''}}
     
     with ThreadPoolExecutor(max_workers=max_workers_productos) as executor:
         future_to_product = {executor.submit(fetch_product_public, prod_id): prod_id for prod_id in unique_product_ids}
@@ -899,8 +910,19 @@ if btn_todos:
         sku_id = detail.get('Id')
         product_id = detail.get('ProductId')
         
-        # Referencias
+        # CORRECCIÓN: ProductReference con fallback
+        # Primero intentar desde el detalle del SKU
         product_reference = detail.get('ProductRefId', '')
+        if not product_reference:
+            enriched = product_enriched_data.get(product_id, {})
+            product_reference = enriched.get('productReference', '')
+        
+        # Si viene vacío, usar el del endpoint público como fallback
+        if not product_reference:
+            enriched = product_enriched_data.get(product_id, {})
+            product_reference = enriched.get('productReference', '')
+        
+        # RefId del SKU está en AlternateIds
         alternate_ids = detail.get('AlternateIds', {})
         ref_id = alternate_ids.get('RefId', '') if isinstance(alternate_ids, dict) else ''
         
@@ -915,26 +937,65 @@ if btn_todos:
         category_id = ''
         category_name = ''
         
+        # Estrategia 1: Usar ProductCategories (dict con id: nombre)
         product_categories = detail.get('ProductCategories', {})
         if product_categories and isinstance(product_categories, dict):
             cat_ids_list = list(product_categories.keys())
             if cat_ids_list:
-                category_id = cat_ids_list[-1]
-                try:
-                    category_name = category_map.get(int(category_id), product_categories[category_id])
-                except:
-                    category_name = product_categories[category_id]
+                category_id = cat_ids_list[-1]  # Última categoría (más específica)
+                
+                # CORRECCIÓN: Construir árbol completo desde ProductCategories
+                # ProductCategories tiene TODAS las categorías del path, construir el árbol
+                category_path_parts = []
+                for cat_id_item in cat_ids_list:
+                    cat_name_item = product_categories.get(cat_id_item, '')
+                    if cat_name_item:
+                        category_path_parts.append(cat_name_item)
+                
+                # Unir con " > " para formar el árbol
+                if category_path_parts:
+                    category_name = " > ".join(category_path_parts)
+                else:
+                    # Fallback: buscar en el category_map
+                    try:
+                        category_name = category_map.get(int(category_id), product_categories[category_id])
+                    except:
+                        product_categories = detail.get('ProductCategories', {})
         
+        # Estrategia 2: Si no hay ProductCategories, usar ProductCategoryIds
         if not category_id:
             product_category_ids = detail.get('ProductCategoryIds', '')
             if product_category_ids:
+                # Formato: "/100/104/276/"
                 cat_ids = [c for c in product_category_ids.split('/') if c]
                 if cat_ids:
-                    category_id = cat_ids[-1]
-                    try:
-                        category_name = category_map.get(int(category_id), '')
-                    except:
-                        category_name = ''
+                    category_id = cat_ids[-1]  # Última categoría (más específica)
+                    
+                    # Construir árbol completo desde category_map
+                    category_path_parts = []
+                    for cat_id_item in cat_ids:
+                        try:
+                            cat_name_from_map = category_map.get(int(cat_id_item), '')
+                            if cat_name_from_map:
+                                # Si el category_map ya tiene el path completo, usarlo
+                                if " > " in cat_name_from_map:
+                                    category_name = cat_name_from_map
+                                    break
+                                else:
+                                    category_path_parts.append(cat_name_from_map)
+                        except:
+                            pass
+                    
+                    # Si construimos las partes, unirlas
+                    if not category_name and category_path_parts:
+                        category_name = " > ".join(category_path_parts)
+                    
+                    # Fallback final: buscar solo la última categoría
+                    if not category_name:
+                        try:
+                            category_name = category_map.get(int(category_id), '')
+                        except:
+                            category_name = ''
         
         # Otros campos
         ean = detail.get('Ean', '')
