@@ -499,7 +499,7 @@ if st.session_state.df_clientes is not None:
     )
 
 # ---------------------------------------------------------------------------------
-# TERCER BLOQUE: EXTRACCIÓN DE PRODUCTOS (VERSIÓN DUAL: TODOS O SOLO ACTIVOS)
+# TERCER BLOQUE: EXTRACCIÓN DE PRODUCTOS (VERSIÓN DUAL CORREGIDA)
 # ---------------------------------------------------------------------------------
 st.markdown("---")
 st.markdown("---")
@@ -517,10 +517,12 @@ st.markdown("### ⚙️ Configuración de Extracción")
 
 # Configuración de workers para requests concurrentes
 with st.expander("⚙️ Configuración Avanzada"):
-    max_workers_productos = st.slider("Requests concurrentes para productos", min_value=1, max_value=30, value=15, 
-                            help="Cantidad de requests simultáneos para obtener detalles de SKUs")
-    page_size = st.number_input("SKUs por página", min_value=1, max_value=1000, value=500,
-                                help="Cantidad de SKUs a obtener por cada request de listado")
+    max_workers_productos = st.slider("Requests concurrentes para productos", min_value=5, max_value=50, value=20, 
+                            help="Cantidad de requests simultáneos para obtener detalles de SKUs. VTEX permite ~10 req/s, con 20 workers tendrás mejor throughput.")
+    page_size = st.number_input("SKUs por página", min_value=100, max_value=1000, value=1000,
+                                help="Cantidad de SKUs a obtener por cada request de listado (máximo 1000)")
+    delay_between_pages = st.slider("Delay entre páginas (segundos)", min_value=0.0, max_value=1.0, value=0.1, step=0.1,
+                                    help="Pausa entre requests de paginación para evitar rate limiting")
 
 # Selector del tipo de extracción
 st.markdown("### 📊 Selecciona el tipo de extracción")
@@ -625,7 +627,7 @@ if btn_todos:
                     break
                 
                 page += 1
-                time.sleep(0.3)
+                time.sleep(delay_between_pages)
                 
             except requests.exceptions.Timeout:
                 st.error(f"⏱️ Timeout en página {page}. Reintentando...")
@@ -641,59 +643,61 @@ if btn_todos:
     
     st.success(f"✅ Total de SKU IDs obtenidos: {len(all_sku_ids)}")
     
-    # PASO 3: OBTENER DETALLES DE CADA SKU (CONCURRENTE)
+    # PASO 3: OBTENER DETALLES DE CADA SKU (CONCURRENTE CON RATE LIMITING)
     st.info(f"🔄 Paso 2/5: Obteniendo detalles de {len(all_sku_ids)} SKUs (concurrente)...")
     
     sku_details = []
     progress_bar_details = st.progress(0)
     status_text_details = st.empty()
+    error_count = 0
+    
+    import threading
+    from queue import Queue
+    
+    # Rate limiter: máximo 10 requests por segundo
+    rate_limit_lock = threading.Lock()
+    last_request_times = Queue(maxsize=10)
+    
+    def rate_limited_request():
+        """Implementa rate limiting de ~10 req/s"""
+        with rate_limit_lock:
+            current_time = time.time()
+            
+            if last_request_times.full():
+                oldest_time = last_request_times.get()
+                time_diff = current_time - oldest_time
+                if time_diff < 1.0:
+                    time.sleep(1.0 - time_diff)
+                current_time = time.time()
+            
+            last_request_times.put(current_time)
     
     def fetch_sku_detail(sku_id):
-        """
-        Función para obtener detalle de un SKU
-        Endpoint: GET https://{account}.vtexcommercestable.com.br/api/catalog_system/pvt/sku/stockkeepingunitbyid/{skuId}
+        """Función para obtener detalle de un SKU con rate limiting"""
+        rate_limited_request()
         
-        Estructura de respuesta real (basada en la API de VTEX):
-        {
-            "Id": 29680,
-            "ProductId": 1000000234,
-            "NameComplete": "Nombre completo del SKU",
-            "SkuName": "Nombre del SKU",
-            "ProductName": "Nombre del producto",
-            "ProductDescription": "Descripción del producto",
-            "ProductRefId": "C36706",
-            "IsActive": true,
-            "BrandName": "Cole Haan",
-            "BrandId": "2000023",
-            "AlternateIds": {
-                "RefId": "C36706-36706-10"  ← El RefId está aquí
-            },
-            "ProductCategories": {
-                "276": "Zapatenis",
-                "104": "Calzados",
-                "100": "Moda"
-            },
-            "CategoriesFullPath": ["/100/104/276/"],
-            "ProductCategoryIds": "/100/104/276/",
-            "Ean": "",
-            "ProductSpecifications": [...],
-            "SkuSpecifications": [...],
-            "ProductClusterNames": {...},
-            "Images": [...],
-            ...
-        }
-        """
         url = f"https://{ACCOUNT_NAME}.vtexcommercestable.com.br/api/catalog_system/pvt/sku/stockkeepingunitbyid/{sku_id}"
         headers = get_vtex_headers()
         headers['Accept'] = 'application/vnd.vtex.ds.v10+json'
         
-        try:
-            resp = requests.get(url, headers=headers, timeout=20)
-            if resp.status_code == 200:
-                return resp.json()
-            return None
-        except:
-            return None
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                resp = requests.get(url, headers=headers, timeout=15)
+                if resp.status_code == 200:
+                    return resp.json()
+                elif resp.status_code == 429:
+                    time.sleep(2 ** attempt)
+                    continue
+                return None
+            except requests.exceptions.Timeout:
+                if attempt < max_retries - 1:
+                    time.sleep(1)
+                    continue
+                return None
+            except:
+                return None
+        return None
     
     from concurrent.futures import ThreadPoolExecutor, as_completed
     
@@ -708,20 +712,17 @@ if btn_todos:
             detail = future.result()
             if detail:
                 sku_details.append(detail)
+            else:
+                error_count += 1
             completed += 1
             
             progress_pct = completed / len(all_sku_ids)
             progress_bar_details.progress(progress_pct)
-            status_text_details.text(f"⏳ Procesados {completed}/{len(all_sku_ids)} SKUs")
+            status_text_details.text(f"⏳ Procesados {completed}/{len(all_sku_ids)} SKUs | ❌ Errores: {error_count}")
     
-    st.success(f"✅ Detalles obtenidos: {len(sku_details)} SKUs")
+    st.success(f"✅ Detalles obtenidos: {len(sku_details)} SKUs | ❌ Errores: {error_count}")
     
-    # DEBUG: Mostrar campos disponibles del primer SKU
-    if sku_details:
-        with st.expander("🔍 Ver campos disponibles (primer SKU para debug)"):
-            st.json(sku_details[0])
-    
-    # PASO 4: OBTENER STOCK DE CADA SKU (CONCURRENTE)
+    # PASO 4: OBTENER STOCK DE CADA SKU (CONCURRENTE CON RATE LIMITING)
     st.info(f"🔄 Paso 3/5: Obteniendo stock de {len(sku_details)} SKUs (concurrente)...")
     
     stock_data = {}
@@ -729,19 +730,32 @@ if btn_todos:
     status_text_stock = st.empty()
     
     def fetch_sku_stock(sku_id):
-        """Función para obtener stock de un SKU"""
+        """Función para obtener stock de un SKU con rate limiting"""
+        rate_limited_request()
+        
         url = f"https://{ACCOUNT_NAME}.vtexcommercestable.com.br/api/logistics/pvt/inventory/skus/{sku_id}"
         headers = get_vtex_headers()
         
-        try:
-            resp = requests.get(url, headers=headers, timeout=20)
-            if resp.status_code == 200:
-                data = resp.json()
-                total_balance = sum([wh.get('totalQuantity', 0) for wh in data.get('balance', [])])
-                return {sku_id: total_balance}
-            return {sku_id: 0}
-        except:
-            return {sku_id: 0}
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                resp = requests.get(url, headers=headers, timeout=15)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    total_balance = sum([wh.get('totalQuantity', 0) for wh in data.get('balance', [])])
+                    return {sku_id: total_balance}
+                elif resp.status_code == 429:
+                    time.sleep(2 ** attempt)
+                    continue
+                return {sku_id: 0}
+            except requests.exceptions.Timeout:
+                if attempt < max_retries - 1:
+                    time.sleep(1)
+                    continue
+                return {sku_id: 0}
+            except:
+                return {sku_id: 0}
+        return {sku_id: 0}
     
     with ThreadPoolExecutor(max_workers=max_workers_productos) as executor:
         future_to_sku_stock = {
@@ -772,44 +786,57 @@ if btn_todos:
     status_text_enriched = st.empty()
     
     def fetch_product_public(product_id):
-        """Función para obtener info pública del producto (atributos y colecciones)"""
+        """Función para obtener info pública del producto con rate limiting"""
+        rate_limited_request()
+        
         url = f"https://{ACCOUNT_NAME}.vtexcommercestable.com.br/api/catalog_system/pub/products/search?fq=productId:{product_id}"
         headers = get_vtex_headers()
         
-        try:
-            resp = requests.get(url, headers=headers, timeout=20)
-            if resp.status_code == 200:
-                data = resp.json()
-                if data and len(data) > 0:
-                    product = data[0]
-                    
-                    # Extraer atributos
-                    atributos = {}
-                    all_specs = product.get("allSpecifications", [])
-                    for spec in all_specs:
-                        valores = product.get(spec, [])
-                        if isinstance(valores, list):
-                            atributos[spec] = valores
-                        else:
-                            atributos[spec] = [valores]
-                    
-                    if product.get("complementName"):
-                        atributos["nombreComplementario"] = [product.get("complementName")]
-                    
-                    # Extraer colecciones
-                    colecciones = []
-                    if product.get("productClusters"):
-                        colecciones = list(product["productClusters"].values())
-                    
-                    return {
-                        product_id: {
-                            'atributos': atributos,
-                            'colecciones': colecciones
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                resp = requests.get(url, headers=headers, timeout=15)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    if data and len(data) > 0:
+                        product = data[0]
+                        
+                        # Extraer atributos
+                        atributos = {}
+                        all_specs = product.get("allSpecifications", [])
+                        for spec in all_specs:
+                            valores = product.get(spec, [])
+                            if isinstance(valores, list):
+                                atributos[spec] = valores
+                            else:
+                                atributos[spec] = [valores]
+                        
+                        if product.get("complementName"):
+                            atributos["nombreComplementario"] = [product.get("complementName")]
+                        
+                        # Extraer colecciones
+                        colecciones = []
+                        if product.get("productClusters"):
+                            colecciones = list(product["productClusters"].values())
+                        
+                        return {
+                            product_id: {
+                                'atributos': atributos,
+                                'colecciones': colecciones
+                            }
                         }
-                    }
-            return {product_id: {'atributos': {}, 'colecciones': []}}
-        except:
-            return {product_id: {'atributos': {}, 'colecciones': []}}
+                elif resp.status_code == 429:
+                    time.sleep(2 ** attempt)
+                    continue
+                return {product_id: {'atributos': {}, 'colecciones': []}}
+            except requests.exceptions.Timeout:
+                if attempt < max_retries - 1:
+                    time.sleep(1)
+                    continue
+                return {product_id: {'atributos': {}, 'colecciones': []}}
+            except:
+                return {product_id: {'atributos': {}, 'colecciones': []}}
+        return {product_id: {'atributos': {}, 'colecciones': []}}
     
     with ThreadPoolExecutor(max_workers=max_workers_productos) as executor:
         future_to_product = {
@@ -843,49 +870,48 @@ if btn_todos:
     productos_rows = []
     
     for detail in sku_details:
-        # Datos del SKU desde el endpoint privado
         sku_id = detail.get('Id')
         product_id = detail.get('ProductId')
         
-        # Nombres - el endpoint trae NameComplete y SkuName
-        sku_name = detail.get('SkuName') or detail.get('NameComplete') or ''
-        product_name = detail.get('ProductName') or ''
+        # CORRECCIÓN 1: ProductRefId está en el nivel superior del SKU detail
+        product_reference = detail.get('ProductRefId', '')
         
-        # Referencias - ProductRefId está en el nivel superior
-        product_reference = detail.get('ProductRefId') or ''
-        
-        # RefId está dentro de AlternateIds
+        # CORRECCIÓN 2: RefId del SKU está en AlternateIds
         alternate_ids = detail.get('AlternateIds', {})
         ref_id = alternate_ids.get('RefId', '') if isinstance(alternate_ids, dict) else ''
+        
+        # Nombres
+        sku_name = detail.get('SkuName') or detail.get('NameComplete') or ''
+        product_name = detail.get('ProductName') or ''
         
         # Marca
         brand_name = detail.get('BrandName') or ''
         
-        # Categoría - extraer del ProductCategories o ProductCategoryIds
-        product_categories = detail.get('ProductCategories', {})
+        # CORRECCIÓN 3: Construcción correcta del árbol de categorías
         category_id = ''
         category_name = ''
         
-        if product_categories:
-            # Obtener la última categoría (más específica)
-            # ProductCategories es un dict con keys de category_id y values de nombres
-            if isinstance(product_categories, dict) and product_categories:
-                # Obtener el último (más específico)
-                last_cat_id = list(product_categories.keys())[-1]
-                category_id = last_cat_id
-                category_name = product_categories[last_cat_id]
+        # Primero intentar con ProductCategories (dict con id: nombre)
+        product_categories = detail.get('ProductCategories', {})
+        if product_categories and isinstance(product_categories, dict):
+            # Obtener la categoría más específica (última en el dict)
+            cat_ids_list = list(product_categories.keys())
+            if cat_ids_list:
+                category_id = cat_ids_list[-1]
+                # Buscar en el mapa de categorías para obtener el path completo
+                try:
+                    category_name = category_map.get(int(category_id), product_categories[category_id])
+                except:
+                    category_name = product_categories[category_id]
         
-        # Si no hay ProductCategories, intentar con CategoriesFullPath
+        # Si no hay ProductCategories, intentar con ProductCategoryIds
         if not category_id:
-            categories_full_path = detail.get('CategoriesFullPath', [])
-            if categories_full_path:
-                # Tomar el primer path y extraer la última categoría
-                first_path = categories_full_path[0]
+            product_category_ids = detail.get('ProductCategoryIds', '')
+            if product_category_ids:
                 # Formato: "/100/104/276/"
-                cat_ids = [c for c in first_path.split('/') if c]
+                cat_ids = [c for c in product_category_ids.split('/') if c]
                 if cat_ids:
-                    category_id = cat_ids[-1]
-                    # Buscar nombre en el mapa
+                    category_id = cat_ids[-1]  # Última categoría (más específica)
                     try:
                         category_name = category_map.get(int(category_id), '')
                     except:
@@ -897,13 +923,13 @@ if btn_todos:
         # Estado activo
         is_active = detail.get('IsActive', False)
         
-        # Stock
+        # CORRECCIÓN 4: Stock correcto desde el endpoint de logistics
         available_quantity = stock_data.get(sku_id, 0)
         
         # Descripción
         description = detail.get('ProductDescription') or detail.get('Description') or detail.get('ModalType') or ''
         
-        # Datos enriquecidos del producto desde endpoint público
+        # Datos enriquecidos del producto
         enriched = product_enriched_data.get(product_id, {'atributos': {}, 'colecciones': []})
         atributos = enriched['atributos']
         colecciones = enriched['colecciones']
@@ -939,7 +965,7 @@ if btn_todos:
     st.session_state.df_productos = pd.DataFrame(
         productos_rows,
         columns=[
-            'productId', 'productReference', 'skuId', 'refId', 'skuName',
+            'productId', 'productReference', 'skuId', 'skuRefId', 'skuName',
             'productName', 'description', 'brandName', 'categoryId', 'categoryName', 
             'ean', 'isActive', 'availableQuantity', 'colecciones'
         ] + attr_headers
@@ -1052,8 +1078,6 @@ elif btn_activos:
         
         if producto.get("complementName"):
             atributos["nombreComplementario"] = [producto.get("complementName")]
-        if producto.get("productClusters"):
-            atributos["colecciones"] = list(producto["productClusters"].values())
         
         producto["_atributos"] = atributos
         all_attributes.update(atributos.keys())
@@ -1069,9 +1093,17 @@ elif btn_activos:
         brand = producto.get('brand', 'N/A')
         category_id = producto.get('categoryId', 'N/A')
         description = producto.get('description') or producto.get('metaTagDescription') or ''
+        
+        # Construir árbol de categoría
         category_name = category_map.get(int(category_id), 'N/A') if category_id != 'N/A' else 'N/A'
-
+        
         atributos = producto.get("_atributos", {})
+        
+        # Extraer colecciones
+        colecciones = []
+        if producto.get("productClusters"):
+            colecciones = list(producto["productClusters"].values())
+        colecciones_str = ", ".join(colecciones) if colecciones else ''
         
         # Procesar SKUs
         items = producto.get('items', [])
@@ -1080,20 +1112,28 @@ elif btn_activos:
             for a in sorted(all_attributes):
                 val = atributos.get(a, [])
                 if isinstance(val, list):
-                    attr_values.append(", ".join(str(v) for v in val))
+                    attr_values.append(", ".join(str(v) for v in val) if val else '')
                 else:
-                    attr_values.append(str(val))
+                    attr_values.append(str(val) if val else '')
             
             productos_rows.append([
-                product_id, product_reference, 'N/A', 'N/A', product_name,
-                (description or "")[:500], brand, category_id, category_name, 0
+                product_id, product_reference, 'N/A', '', '', product_name,
+                (description or "")[:500], brand, category_id, category_name, 0, colecciones_str
             ] + attr_values)
         else:
             for item in items:
                 sku_id = item.get('itemId', 'N/A')
                 sku_name = item.get('name', 'N/A')
-                available_qty = 0
                 
+                # Extraer refId del SKU
+                ref_id = ''
+                if item.get('referenceId'):
+                    ref_id_list = item.get('referenceId', [])
+                    if ref_id_list and len(ref_id_list) > 0:
+                        ref_id = ref_id_list[0].get('Value', '')
+                
+                # Calcular stock disponible
+                available_qty = 0
                 for seller in item.get('sellers', []):
                     offer = seller.get('commertialOffer', {}) or seller.get('commercialOffer', {})
                     qty = offer.get('AvailableQuantity', 0)
@@ -1104,20 +1144,20 @@ elif btn_activos:
                 for a in sorted(all_attributes):
                     val = atributos.get(a, [])
                     if isinstance(val, list):
-                        attr_values.append(", ".join(str(v) for v in val))
+                        attr_values.append(", ".join(str(v) for v in val) if val else '')
                     else:
-                        attr_values.append(str(val))
+                        attr_values.append(str(val) if val else '')
                 
                 productos_rows.append([
-                    product_id, product_reference, sku_id, sku_name, product_name,
-                    (description or "")[:500], brand, category_id, category_name, available_qty
+                    product_id, product_reference, sku_id, ref_id, sku_name, product_name,
+                    (description or "")[:500], brand, category_id, category_name, available_qty, colecciones_str
                 ] + attr_values)
     
     # Crear DataFrames y guardar en session_state
     st.session_state.df_productos = pd.DataFrame(
         productos_rows,
-        columns=['productId','productReference','skuId','skuName','productName',
-                'description','brand','categoryId','categoryName','availableQuantity'] + attr_headers
+        columns=['productId','productReference','skuId','skuRefId','skuName','productName',
+                'description','brand','categoryId','categoryName','availableQuantity','colecciones'] + attr_headers
     )
     
     # Crear DataFrame de atributos
@@ -1204,7 +1244,6 @@ if st.session_state.df_productos is not None:
             mime="text/csv",
             use_container_width=True
         )
-
 
 # ---------------------------------------------------------------------------------
 # CUARTO BLOQUE: EXTRACCIÓN DE VENTAS (MEJORADO Y CORREGIDO)
