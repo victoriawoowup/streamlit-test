@@ -499,8 +499,9 @@ if st.session_state.df_clientes is not None:
     )
 
 # ---------------------------------------------------------------------------------
-# BLOQUE 3 - EXTRACCIÓN DE PRODUCTOS VTEX - VERSIÓN CON GUARDADO DE PROGRESO
+# BLOQUE 3 - EXTRACCIÓN DE PRODUCTOS VTEX - VERSIÓN CORREGIDA (NO RESETEA LA APP)
 # ---------------------------------------------------------------------------------
+
 import streamlit as st
 import requests
 import pandas as pd
@@ -522,6 +523,10 @@ if 'df_productos' not in st.session_state:
     st.session_state.df_productos = None
 if 'paso_actual' not in st.session_state:
     st.session_state.paso_actual = 0
+if 'extraccion_finalizada' not in st.session_state:
+    st.session_state.extraccion_finalizada = False
+if 'mostrar_descarga' not in st.session_state:
+    st.session_state.mostrar_descarga = False
 
 # Configuración
 st.markdown("### ⚙️ Configuración de Extracción")
@@ -531,7 +536,7 @@ with st.expander("⚙️ Configuración Avanzada"):
     page_size = st.number_input("SKUs por página", 100, 1000, 1000, key="pagesize_productos")
     delay_between_pages = st.slider("Delay entre páginas (seg)", 0.0, 1.0, 0.1, 0.1, key="delay_productos")
     lote_guardado = st.number_input("Guardar progreso cada N SKUs", 500, 5000, 1000,
-                                    help="Cada cuántos SKUs se guarda el progreso en disco", 
+                                    help="Cada cuántos SKUs se guarda el progreso en disco",
                                     key="lote_productos")
 
 # ================================================================================
@@ -616,7 +621,7 @@ def obtener_categorias_productos():
             guardar_progreso_productos(0, category_map, "categorias.json")
             st.success(f"✅ {len(category_map)} categorías")
         else:
-            st.warning(f"⚠️ No se pudieron cargar categorías: Status {resp.status_code}")
+            st.warning(f"⚠️ Error categorías: Status {resp.status_code}")
     except Exception as e:
         st.error(f"❌ Error: {e}")
     
@@ -657,7 +662,6 @@ def listar_sku_ids_productos():
             all_ids.extend(ids)
             status.text(f"📄 Página {page} | Total: {len(all_ids)} SKUs")
             
-            # Guardar progreso cada 10 páginas
             if page % 10 == 0:
                 guardar_progreso_productos(1, all_ids, "sku_ids.json")
                 st.info(f"💾 Progreso guardado: {len(all_ids)} IDs")
@@ -724,7 +728,6 @@ def obtener_detalles_productos(sku_ids):
             progress.progress(i / len(sku_ids))
             status.text(f"⏳ {i}/{len(sku_ids)} | ❌ {errores} errores")
             
-            # Guardar progreso incremental
             if i % lote_guardado == 0:
                 guardar_progreso_productos(2, detalles, "sku_details.json")
                 st.info(f"💾 Progreso guardado: {len(detalles)} detalles")
@@ -840,6 +843,7 @@ def obtener_precios_productos(detalles):
 # ================================================================================
 # INTERFAZ PRINCIPAL
 # ================================================================================
+
 st.markdown("### 🎮 Control de Extracción")
 
 col1, col2, col3 = st.columns(3)
@@ -858,6 +862,8 @@ with col3:
     if st.button("🗑️ LIMPIAR CACHÉ", use_container_width=True, key="btn_limpiar"):
         limpiar_cache_productos()
         st.session_state.paso_actual = 0
+        st.session_state.extraccion_finalizada = False
+        st.session_state.mostrar_descarga = False
 
 # Mostrar estado del caché
 if os.path.exists(CACHE_DIR):
@@ -872,32 +878,23 @@ if os.path.exists(CACHE_DIR):
 # Ejecutar extracción
 if st.session_state.paso_actual > 0:
     try:
-        # Paso 0: Categorías
         category_map = obtener_categorias_productos()
         
-        # Paso 1: SKU IDs
         sku_ids = listar_sku_ids_productos()
-        
         if not sku_ids:
             st.error("❌ No se obtuvieron SKU IDs")
             st.session_state.paso_actual = 0
             st.stop()
         
-        # Paso 2: Detalles
         detalles = obtener_detalles_productos(sku_ids)
-        
         if not detalles:
             st.error("❌ No se obtuvieron detalles de productos")
             st.session_state.paso_actual = 0
             st.stop()
         
-        # Paso 3: Stock
         stock_data = obtener_stock_productos(detalles)
-        
-        # Paso 4: Precios
         price_data = obtener_precios_productos(detalles)
         
-        # Generar DataFrame final
         st.info("🔄 Generando DataFrame final con todos los datos...")
         
         rows = []
@@ -905,7 +902,6 @@ if st.session_state.paso_actual > 0:
             sku_id = d.get('Id')
             product_id = d.get('ProductId')
             
-            # Categorías
             category_id = ''
             category_name = ''
             product_categories = d.get('ProductCategories', {})
@@ -939,9 +935,12 @@ if st.session_state.paso_actual > 0:
         
         df = pd.DataFrame(rows)
         st.session_state.df_productos = df
-        st.session_state.paso_actual = 0
+
+        # 🔥 CORRECCIÓN: NO reiniciar flujo, no perder el botón
+        st.session_state.paso_actual = 99
+        st.session_state.extraccion_finalizada = True
+        st.session_state.mostrar_descarga = True
         
-        # Guardar metadata
         st.session_state.productos_data = {
             'total_skus': len(df),
             'total_activos': df['isActive'].sum(),
@@ -951,14 +950,12 @@ if st.session_state.paso_actual > 0:
         
         st.success("🎉 EXTRACCIÓN COMPLETADA")
         
-        # Mostrar resultados
         col1, col2, col3, col4 = st.columns(4)
         col1.metric("Total SKUs", len(df))
         col2.metric("Activos", int(df['isActive'].sum()))
         col3.metric("Con Stock", int((df['availableQuantity'] > 0).sum()))
         col4.metric("Con Precio", int((df['price'] > 0).sum()))
         
-        # Análisis adicional
         with st.expander("📊 Análisis Detallado"):
             col1, col2 = st.columns(2)
             with col1:
@@ -966,7 +963,7 @@ if st.session_state.paso_actual > 0:
                 total_stock = df['availableQuantity'].sum()
                 avg_stock = df[df['availableQuantity'] > 0]['availableQuantity'].mean()
                 st.metric("Stock Total", f"{total_stock:,.0f}")
-                st.metric("Stock Promedio", f"{avg_stock:,.1f}" if not pd.isna(avg_stock) else "0")
+                st.metric("Promedio Stock", f"{avg_stock:,.1f}" if not pd.isna(avg_stock) else "0")
             
             with col2:
                 st.markdown("**Precios**")
@@ -978,16 +975,16 @@ if st.session_state.paso_actual > 0:
         st.markdown("#### 👀 Muestra de productos")
         st.dataframe(df.head(20), use_container_width=True)
         
-        # Descargar
-        csv = df.to_csv(index=False, encoding='utf-8')
-        st.download_button(
-            "📥 DESCARGAR CSV COMPLETO",
-            csv,
-            f"productos_vtex_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
-            "text/csv",
-            use_container_width=True,
-            key="btn_download_productos"
-        )
+        if st.session_state.mostrar_descarga:
+            csv = df.to_csv(index=False, encoding='utf-8')
+            st.download_button(
+                "📥 DESCARGAR CSV COMPLETO",
+                csv,
+                f"productos_vtex_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                "text/csv",
+                use_container_width=True,
+                key="btn_download_productos"
+            )
         
     except Exception as e:
         st.error(f"❌ Error durante la extracción: {str(e)}")
@@ -996,7 +993,7 @@ if st.session_state.paso_actual > 0:
         with st.expander("🔍 Ver detalle técnico del error"):
             st.code(traceback.format_exc())
 
-# Mostrar resultados persistidos
+# Mostrar resultados anteriores cuando ya terminó
 elif st.session_state.df_productos is not None:
     st.info("📋 Mostrando resultados de extracción anterior")
     
@@ -1011,15 +1008,16 @@ elif st.session_state.df_productos is not None:
     
     st.dataframe(df.head(20), use_container_width=True)
     
-    csv = df.to_csv(index=False, encoding='utf-8')
-    st.download_button(
-        "📥 DESCARGAR CSV",
-        csv,
-        f"productos_vtex_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
-        "text/csv",
-        use_container_width=True,
-        key="btn_download_productos_cached"
-    )
+    if st.session_state.mostrar_descarga:
+        csv = df.to_csv(index=False, encoding='utf-8')
+        st.download_button(
+            "📥 DESCARGAR CSV",
+            csv,
+            f"productos_vtex_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+            "text/csv",
+            use_container_width=True,
+            key="btn_download_productos_cached"
+        )
 
 # ---------------------------------------------------------------------------------
 # CUARTO BLOQUE: EXTRACCIÓN DE VENTAS (MEJORADO Y CORREGIDO)
