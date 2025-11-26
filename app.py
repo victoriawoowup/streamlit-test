@@ -521,6 +521,8 @@ if 'productos_data' not in st.session_state:
     st.session_state.productos_data = None
 if 'df_productos' not in st.session_state:
     st.session_state.df_productos = None
+if 'df_atributos' not in st.session_state:
+    st.session_state.df_atributos = None
 if 'paso_actual' not in st.session_state:
     st.session_state.paso_actual = 0
 if 'extraccion_finalizada' not in st.session_state:
@@ -897,6 +899,22 @@ if st.session_state.paso_actual > 0:
         
         st.info("🔄 Generando DataFrame final con todos los datos...")
         
+        # -----------------------------
+        # RECOLECTAR TODOS LOS ATRIBUTOS (allSpecifications)
+        # -----------------------------
+        all_attributes = set()
+        for d in detalles:
+            specs = d.get('allSpecifications') or d.get('AllSpecifications') or []
+            if isinstance(specs, list):
+                for s in specs:
+                    # normalizar nombres como string
+                    if isinstance(s, str) and s.strip():
+                        all_attributes.add(s.strip())
+        
+        # orden consistente
+        sorted_attrs = sorted(all_attributes)
+        
+        # Para armar df de productos (una fila por SKU) + columnas de atributos
         rows = []
         for d in detalles:
             sku_id = d.get('Id')
@@ -917,25 +935,129 @@ if st.session_state.paso_actual > 0:
                     if category_path_parts:
                         category_name = " > ".join(category_path_parts)
             
-            rows.append({
+            # descripción (asegurar string)
+            description = d.get('description') or d.get('Description') or d.get('metaTagDescription') or ''
+            if description is None:
+                description = ''
+            
+            # datos base por fila (orden solicitado)
+            base = {
                 'productId': product_id,
-                'productReference': d.get('ProductRefId', ''),
+                'productReference': d.get('ProductRefId', '') or d.get('productReference', ''),
                 'skuId': sku_id,
-                'skuRefId': d.get('AlternateIds', {}).get('RefId', '') if isinstance(d.get('AlternateIds'), dict) else '',
-                'skuName': d.get('SkuName', ''),
-                'productName': d.get('ProductName', ''),
-                'brandName': d.get('BrandName', ''),
+                'refId': d.get('AlternateIds', {}).get('RefId', '') if isinstance(d.get('AlternateIds'), dict) else '',
+                'skuName': d.get('SkuName', '') or d.get('name', ''),
+                'productName': d.get('ProductName', '') or d.get('productName', ''),
+                'description': (description or "")[:10000],
+                'brand': d.get('BrandName', '') or d.get('brand', ''),
                 'categoryId': category_id,
                 'categoryName': category_name,
-                'ean': d.get('Ean', ''),
-                'isActive': d.get('IsActive', False),
-                'availableQuantity': stock_data.get(sku_id, 0),
-                'price': price_data.get(sku_id, 0)
-            })
+                'availableQuantity': stock_data.get(sku_id, 0)
+            }
+            
+            # atributos: intentar varias formas de obtener el valor para cada attribute
+            attr_values = {}
+            for attr in sorted_attrs:
+                val = None
+                # 1) campo directo (ej: "Color": ["Rojo"])
+                if attr in d and d.get(attr) is not None:
+                    val = d.get(attr)
+                # 2) lowercase key
+                elif attr.lower() in d and d.get(attr.lower()) is not None:
+                    val = d.get(attr.lower())
+                # 3) dentro de 'specifications' o 'Specifications' si existiera
+                elif isinstance(d.get('specifications'), dict) and d.get('specifications').get(attr):
+                    val = d.get('specifications').get(attr)
+                elif isinstance(d.get('Specifications'), dict) and d.get('Specifications').get(attr):
+                    val = d.get('Specifications').get(attr)
+                # 4) fallback None
+                
+                # Normalizar a lista de strings
+                values_list = []
+                if val is None:
+                    values_list = []
+                elif isinstance(val, list):
+                    for v in val:
+                        if v is None:
+                            continue
+                        # si vienen como dicts con 'Name' o 'Value'
+                        if isinstance(v, dict):
+                            # intentar varias keys comunes
+                            v_val = v.get('Name') or v.get('Value') or v.get('value') or v.get('name') or str(v)
+                            values_list.append(str(v_val))
+                        else:
+                            values_list.append(str(v))
+                else:
+                    # valor simple (string/número)
+                    values_list = [str(val)]
+                
+                # unir con coma+espacio (opción A)
+                attr_values[attr] = ", ".join([x for x in values_list if x and x.strip()]) if values_list else ""
+            
+            # juntar base + atributos con prefijo 'atributo.'
+            row = dict(base)  # copia
+            for attr in sorted_attrs:
+                row[f"atributo.{attr}"] = attr_values.get(attr, "")
+            
+            # incluir price como columna adicional si la querés (no requerida en la lista, pero puede quedar)
+            row['price'] = price_data.get(sku_id, 0)
+            
+            rows.append(row)
         
-        df = pd.DataFrame(rows)
+        # columnas base solicitadas + atributos dinámicos (en orden)
+        base_columns = [
+            'productId', 'productReference', 'skuId', 'refId', 'skuName', 'productName',
+            'description', 'brand', 'categoryId', 'categoryName', 'availableQuantity'
+        ]
+        atributo_columns = [f"atributo.{a}" for a in sorted_attrs]
+        final_columns = base_columns + atributo_columns + ['price']
+        
+        df = pd.DataFrame(rows, columns=final_columns)
         st.session_state.df_productos = df
 
+        # -----------------------------
+        # GENERAR CSV DE ATRIBUTOS (atributo, valores_ejemplo)
+        # -----------------------------
+        atributos_info = []
+        # recolectar valores únicos por atributo
+        valores_por_attr = {a: set() for a in sorted_attrs}
+        for d in detalles:
+            for a in sorted_attrs:
+                # intentar obtener valores de la misma forma que arriba
+                val = None
+                if a in d and d.get(a) is not None:
+                    val = d.get(a)
+                elif a.lower() in d and d.get(a.lower()) is not None:
+                    val = d.get(a.lower())
+                elif isinstance(d.get('specifications'), dict) and d.get('specifications').get(a):
+                    val = d.get('specifications').get(a)
+                elif isinstance(d.get('Specifications'), dict) and d.get('Specifications').get(a):
+                    val = d.get('Specifications').get(a)
+                
+                if val is None:
+                    continue
+                if isinstance(val, list):
+                    for v in val:
+                        if v is None:
+                            continue
+                        if isinstance(v, dict):
+                            v_val = v.get('Name') or v.get('Value') or v.get('value') or v.get('name') or str(v)
+                            valores_por_attr[a].add(str(v_val))
+                        else:
+                            valores_por_attr[a].add(str(v))
+                else:
+                    valores_por_attr[a].add(str(val))
+        
+        for a in sorted_attrs:
+            ejemplos = sorted(list(valores_por_attr.get(a, set())))[:200]  # limitar ejemplos
+            atributos_info.append({
+                'atributo': f"atributo.{a}",
+                'valores_ejemplo': ", ".join(ejemplos)
+            })
+        
+        df_atributos = pd.DataFrame(atributos_info)
+        st.session_state.df_atributos = df_atributos
+        
         # 🔥 CORRECCIÓN: NO reiniciar flujo, no perder el botón
         st.session_state.paso_actual = 99
         st.session_state.extraccion_finalizada = True
@@ -943,7 +1065,7 @@ if st.session_state.paso_actual > 0:
         
         st.session_state.productos_data = {
             'total_skus': len(df),
-            'total_activos': df['isActive'].sum(),
+            'total_activos': df.shape[0],  # si no tenés isActive, usar total filas
             'total_con_stock': (df['availableQuantity'] > 0).sum(),
             'total_con_precio': (df['price'] > 0).sum()
         }
@@ -952,7 +1074,8 @@ if st.session_state.paso_actual > 0:
         
         col1, col2, col3, col4 = st.columns(4)
         col1.metric("Total SKUs", len(df))
-        col2.metric("Activos", int(df['isActive'].sum()))
+        # si tenés isActive podrías calcular mejor
+        col2.metric("Activos (filas)", int(st.session_state.productos_data['total_activos']))
         col3.metric("Con Stock", int((df['availableQuantity'] > 0).sum()))
         col4.metric("Con Precio", int((df['price'] > 0).sum()))
         
@@ -972,18 +1095,29 @@ if st.session_state.paso_actual > 0:
                 st.metric("Precio Promedio", f"${avg_price:,.2f}" if not pd.isna(avg_price) else "$0.00")
                 st.metric("Precio Máximo", f"${max_price:,.2f}" if not pd.isna(max_price) else "$0.00")
         
-        st.markdown("#### 👀 Muestra de productos")
+        st.markdown("#### 👀 Muestra de productos (primeras 20 filas)")
         st.dataframe(df.head(20), use_container_width=True)
         
+        # Descargas: productos + atributos
         if st.session_state.mostrar_descarga:
             csv = df.to_csv(index=False, encoding='utf-8')
             st.download_button(
-                "📥 DESCARGAR CSV COMPLETO",
+                "📥 DESCARGAR CSV COMPLETO (Productos x SKU)",
                 csv,
                 f"productos_vtex_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
                 "text/csv",
                 use_container_width=True,
                 key="btn_download_productos"
+            )
+            # CSV atributos separado
+            csv_attr = df_atributos.to_csv(index=False, encoding='utf-8')
+            st.download_button(
+                "📥 DESCARGAR CSV DE ATRIBUTOS",
+                csv_attr,
+                f"atributos_vtex_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                "text/csv",
+                use_container_width=True,
+                key="btn_download_atributos"
             )
         
     except Exception as e:
@@ -999,12 +1133,13 @@ elif st.session_state.df_productos is not None:
     
     data = st.session_state.productos_data
     df = st.session_state.df_productos
+    df_atributos = st.session_state.df_atributos
     
     col1, col2, col3, col4 = st.columns(4)
     col1.metric("Total SKUs", data['total_skus'])
-    col2.metric("Activos", data['total_activos'])
-    col3.metric("Con Stock", data['total_con_stock'])
-    col4.metric("Con Precio", data['total_con_precio'])
+    col2.metric("Activos", data.get('total_activos', 0))
+    col3.metric("Con Stock", data.get('total_con_stock', 0))
+    col4.metric("Con Precio", data.get('total_con_precio', 0))
     
     st.dataframe(df.head(20), use_container_width=True)
     
@@ -1018,6 +1153,16 @@ elif st.session_state.df_productos is not None:
             use_container_width=True,
             key="btn_download_productos_cached"
         )
+        if df_atributos is not None:
+            csv_attr = df_atributos.to_csv(index=False, encoding='utf-8')
+            st.download_button(
+                "📥 DESCARGAR CSV DE ATRIBUTOS",
+                csv_attr,
+                f"atributos_vtex_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                "text/csv",
+                use_container_width=True,
+                key="btn_download_atributos_cached"
+            )
 
 # ---------------------------------------------------------------------------------
 # CUARTO BLOQUE: EXTRACCIÓN DE VENTAS (MEJORADO Y CORREGIDO)
