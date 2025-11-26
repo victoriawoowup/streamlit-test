@@ -501,9 +501,7 @@ if st.session_state.df_clientes is not None:
 # ---------------------------------------------------------------------------------
 # BLOQUE 3 - EXTRACCIÓN DE PRODUCTOS VTEX - VERSIÓN CORREGIDA (NO RESETEA LA APP)
 # ---------------------------------------------------------------------------------
-import os
-st.write("Directorio actual:", os.getcwd())
-st.write("Carpeta donde Streamlit crearía el cache:", os.path.abspath("vtex_cache"))
+
 
 import streamlit as st
 import requests
@@ -518,6 +516,10 @@ from queue import Queue
 
 st.markdown("---")
 st.header("📦 Extracción de Productos VTEX")
+
+import os
+st.write("Directorio actual:", os.getcwd())
+st.write("Carpeta donde Streamlit crearía el cache:", os.path.abspath("vtex_cache"))
 
 # Inicializar session state
 if 'productos_data' not in st.session_state:
