@@ -527,11 +527,12 @@ if 'paso_actual' not in st.session_state:
 st.markdown("### ⚙️ Configuración de Extracción")
 
 with st.expander("⚙️ Configuración Avanzada"):
-    max_workers = st.slider("Requests concurrentes", 5, 50, 20)
-    page_size = st.number_input("SKUs por página", 100, 1000, 1000)
-    delay_between_pages = st.slider("Delay entre páginas (seg)", 0.0, 1.0, 0.1, 0.1)
+    max_workers = st.slider("Requests concurrentes", 5, 50, 20, key="workers_productos")
+    page_size = st.number_input("SKUs por página", 100, 1000, 1000, key="pagesize_productos")
+    delay_between_pages = st.slider("Delay entre páginas (seg)", 0.0, 1.0, 0.1, 0.1, key="delay_productos")
     lote_guardado = st.number_input("Guardar progreso cada N SKUs", 500, 5000, 1000,
-                                    help="Cada cuántos SKUs se guarda el progreso en disco")
+                                    help="Cada cuántos SKUs se guarda el progreso en disco", 
+                                    key="lote_productos")
 
 # ================================================================================
 # FUNCIONES DE GUARDADO/CARGA DE PROGRESO
@@ -542,7 +543,7 @@ def crear_cache_dir():
     if not os.path.exists(CACHE_DIR):
         os.makedirs(CACHE_DIR)
 
-def guardar_progreso(paso, datos, nombre_archivo):
+def guardar_progreso_productos(paso, datos, nombre_archivo):
     """Guarda progreso en archivo JSON"""
     crear_cache_dir()
     ruta = os.path.join(CACHE_DIR, nombre_archivo)
@@ -550,7 +551,7 @@ def guardar_progreso(paso, datos, nombre_archivo):
         json.dump(datos, f, ensure_ascii=False, indent=2)
     return ruta
 
-def cargar_progreso(nombre_archivo):
+def cargar_progreso_productos(nombre_archivo):
     """Carga progreso desde archivo JSON"""
     ruta = os.path.join(CACHE_DIR, nombre_archivo)
     if os.path.exists(ruta):
@@ -558,25 +559,12 @@ def cargar_progreso(nombre_archivo):
             return json.load(f)
     return None
 
-def limpiar_cache():
+def limpiar_cache_productos():
     """Limpia archivos de caché"""
     if os.path.exists(CACHE_DIR):
         for archivo in os.listdir(CACHE_DIR):
             os.remove(os.path.join(CACHE_DIR, archivo))
         st.success("🗑️ Caché limpiado")
-
-# ================================================================================
-# FUNCIONES AUXILIARES
-# ================================================================================
-def get_vtex_headers():
-    """Obtiene headers de VTEX desde session_state"""
-    return {
-        'X-VTEX-API-AppKey': st.session_state.get('app_key', ''),
-        'X-VTEX-API-AppToken': st.session_state.get('app_token', ''),
-        'Content-Type': 'application/json'
-    }
-
-ACCOUNT_NAME = st.session_state.get('account_name', 'tu-cuenta')
 
 # Rate limiting
 rate_limit_lock = threading.Lock()
@@ -596,10 +584,10 @@ def rate_limited_request():
 # ================================================================================
 # PASO 0: CATEGORÍAS
 # ================================================================================
-def obtener_categorias():
+def obtener_categorias_productos():
     st.info("🔄 Obteniendo categorías...")
     
-    cache = cargar_progreso("categorias.json")
+    cache = cargar_progreso_productos("categorias.json")
     if cache:
         st.success(f"✅ {len(cache)} categorías (desde caché)")
         return cache
@@ -625,8 +613,10 @@ def obtener_categorias():
                         extract_categories(node['children'], full_path)
             
             extract_categories(tree)
-            guardar_progreso(0, category_map, "categorias.json")
+            guardar_progreso_productos(0, category_map, "categorias.json")
             st.success(f"✅ {len(category_map)} categorías")
+        else:
+            st.warning(f"⚠️ No se pudieron cargar categorías: Status {resp.status_code}")
     except Exception as e:
         st.error(f"❌ Error: {e}")
     
@@ -635,10 +625,10 @@ def obtener_categorias():
 # ================================================================================
 # PASO 1: LISTAR SKU IDs
 # ================================================================================
-def listar_sku_ids():
+def listar_sku_ids_productos():
     st.info("🔄 PASO 1/4: Listando SKU IDs...")
     
-    cache = cargar_progreso("sku_ids.json")
+    cache = cargar_progreso_productos("sku_ids.json")
     if cache:
         st.success(f"✅ {len(cache)} SKU IDs (desde caché)")
         return cache
@@ -648,7 +638,6 @@ def listar_sku_ids():
     
     all_ids = []
     page = 1
-    progress = st.progress(0)
     status = st.empty()
     
     while True:
@@ -670,7 +659,8 @@ def listar_sku_ids():
             
             # Guardar progreso cada 10 páginas
             if page % 10 == 0:
-                guardar_progreso(1, all_ids, "sku_ids.json")
+                guardar_progreso_productos(1, all_ids, "sku_ids.json")
+                st.info(f"💾 Progreso guardado: {len(all_ids)} IDs")
             
             if len(ids) < page_size:
                 break
@@ -682,23 +672,22 @@ def listar_sku_ids():
             st.error(f"❌ Error: {e}")
             break
     
-    guardar_progreso(1, all_ids, "sku_ids.json")
+    guardar_progreso_productos(1, all_ids, "sku_ids.json")
     st.success(f"✅ PASO 1 COMPLETADO: {len(all_ids)} SKU IDs")
     return all_ids
 
 # ================================================================================
 # PASO 2: OBTENER DETALLES
 # ================================================================================
-def obtener_detalles(sku_ids):
+def obtener_detalles_productos(sku_ids):
     st.info(f"🔄 PASO 2/4: Obteniendo detalles de {len(sku_ids)} SKUs...")
     
-    cache = cargar_progreso("sku_details.json")
+    cache = cargar_progreso_productos("sku_details.json")
     if cache:
         st.success(f"✅ {len(cache)} detalles (desde caché)")
         return cache
     
     detalles = []
-    procesados = set()
     errores = 0
     
     progress = st.progress(0)
@@ -737,26 +726,25 @@ def obtener_detalles(sku_ids):
             
             # Guardar progreso incremental
             if i % lote_guardado == 0:
-                guardar_progreso(2, detalles, "sku_details.json")
+                guardar_progreso_productos(2, detalles, "sku_details.json")
                 st.info(f"💾 Progreso guardado: {len(detalles)} detalles")
     
-    guardar_progreso(2, detalles, "sku_details.json")
+    guardar_progreso_productos(2, detalles, "sku_details.json")
     st.success(f"✅ PASO 2 COMPLETADO: {len(detalles)} detalles | ❌ {errores} errores")
     return detalles
 
 # ================================================================================
 # PASO 3: OBTENER STOCK
 # ================================================================================
-def obtener_stock(detalles):
-    st.info(f"🔄 PASO 3/4: Obteniendo stock...")
+def obtener_stock_productos(detalles):
+    st.info(f"🔄 PASO 3/4: Obteniendo stock de {len(detalles)} SKUs...")
     
-    cache = cargar_progreso("stock_data.json")
+    cache = cargar_progreso_productos("stock_data.json")
     if cache:
         st.success(f"✅ Stock de {len(cache)} SKUs (desde caché)")
         return cache
     
     stock_data = {}
-    errores = 0
     
     progress = st.progress(0)
     status = st.empty()
@@ -790,19 +778,20 @@ def obtener_stock(detalles):
             status.text(f"⏳ {i}/{len(sku_ids)}")
             
             if i % lote_guardado == 0:
-                guardar_progreso(3, stock_data, "stock_data.json")
+                guardar_progreso_productos(3, stock_data, "stock_data.json")
+                st.info(f"💾 Progreso guardado: {len(stock_data)} stocks")
     
-    guardar_progreso(3, stock_data, "stock_data.json")
+    guardar_progreso_productos(3, stock_data, "stock_data.json")
     st.success(f"✅ PASO 3 COMPLETADO: {len(stock_data)} stocks")
     return stock_data
 
 # ================================================================================
 # PASO 4: OBTENER PRECIOS
 # ================================================================================
-def obtener_precios(detalles):
-    st.info(f"🔄 PASO 4/4: Obteniendo precios...")
+def obtener_precios_productos(detalles):
+    st.info(f"🔄 PASO 4/4: Obteniendo precios de {len(detalles)} SKUs...")
     
-    cache = cargar_progreso("price_data.json")
+    cache = cargar_progreso_productos("price_data.json")
     if cache:
         st.success(f"✅ Precios de {len(cache)} SKUs (desde caché)")
         return cache
@@ -841,61 +830,108 @@ def obtener_precios(detalles):
             status.text(f"⏳ {i}/{len(sku_ids)}")
             
             if i % lote_guardado == 0:
-                guardar_progreso(4, price_data, "price_data.json")
+                guardar_progreso_productos(4, price_data, "price_data.json")
+                st.info(f"💾 Progreso guardado: {len(price_data)} precios")
     
-    guardar_progreso(4, price_data, "price_data.json")
+    guardar_progreso_productos(4, price_data, "price_data.json")
     st.success(f"✅ PASO 4 COMPLETADO: {len(price_data)} precios")
     return price_data
 
 # ================================================================================
 # INTERFAZ PRINCIPAL
 # ================================================================================
+st.markdown("### 🎮 Control de Extracción")
+
 col1, col2, col3 = st.columns(3)
 
 with col1:
-    if st.button("🚀 INICIAR EXTRACCIÓN", type="primary", use_container_width=True):
+    if st.button("🚀 INICIAR EXTRACCIÓN", type="primary", use_container_width=True, key="btn_iniciar"):
+        validar_credenciales()
         st.session_state.paso_actual = 1
 
 with col2:
-    if st.button("♻️ CONTINUAR DESDE CACHÉ", use_container_width=True):
+    if st.button("♻️ CONTINUAR DESDE CACHÉ", use_container_width=True, key="btn_continuar"):
+        validar_credenciales()
         st.session_state.paso_actual = 2
 
 with col3:
-    if st.button("🗑️ LIMPIAR CACHÉ", use_container_width=True):
-        limpiar_cache()
+    if st.button("🗑️ LIMPIAR CACHÉ", use_container_width=True, key="btn_limpiar"):
+        limpiar_cache_productos()
         st.session_state.paso_actual = 0
+
+# Mostrar estado del caché
+if os.path.exists(CACHE_DIR):
+    archivos = os.listdir(CACHE_DIR)
+    if archivos:
+        with st.expander("💾 Estado del Caché"):
+            for archivo in archivos:
+                ruta = os.path.join(CACHE_DIR, archivo)
+                tamaño = os.path.getsize(ruta) / 1024  # KB
+                st.text(f"• {archivo}: {tamaño:.1f} KB")
 
 # Ejecutar extracción
 if st.session_state.paso_actual > 0:
     try:
         # Paso 0: Categorías
-        category_map = obtener_categorias()
+        category_map = obtener_categorias_productos()
         
         # Paso 1: SKU IDs
-        sku_ids = listar_sku_ids()
+        sku_ids = listar_sku_ids_productos()
+        
+        if not sku_ids:
+            st.error("❌ No se obtuvieron SKU IDs")
+            st.session_state.paso_actual = 0
+            st.stop()
         
         # Paso 2: Detalles
-        detalles = obtener_detalles(sku_ids)
+        detalles = obtener_detalles_productos(sku_ids)
+        
+        if not detalles:
+            st.error("❌ No se obtuvieron detalles de productos")
+            st.session_state.paso_actual = 0
+            st.stop()
         
         # Paso 3: Stock
-        stock_data = obtener_stock(detalles)
+        stock_data = obtener_stock_productos(detalles)
         
         # Paso 4: Precios
-        price_data = obtener_precios(detalles)
+        price_data = obtener_precios_productos(detalles)
         
         # Generar DataFrame final
-        st.info("🔄 Generando DataFrame final...")
+        st.info("🔄 Generando DataFrame final con todos los datos...")
         
         rows = []
         for d in detalles:
             sku_id = d.get('Id')
+            product_id = d.get('ProductId')
+            
+            # Categorías
+            category_id = ''
+            category_name = ''
+            product_categories = d.get('ProductCategories', {})
+            if product_categories and isinstance(product_categories, dict):
+                cat_ids_list = list(product_categories.keys())
+                if cat_ids_list:
+                    category_id = cat_ids_list[-1]
+                    category_path_parts = []
+                    for cat_id_item in cat_ids_list:
+                        cat_name_item = product_categories.get(cat_id_item, '')
+                        if cat_name_item:
+                            category_path_parts.append(cat_name_item)
+                    if category_path_parts:
+                        category_name = " > ".join(category_path_parts)
+            
             rows.append({
-                'productId': d.get('ProductId'),
+                'productId': product_id,
                 'productReference': d.get('ProductRefId', ''),
                 'skuId': sku_id,
+                'skuRefId': d.get('AlternateIds', {}).get('RefId', '') if isinstance(d.get('AlternateIds'), dict) else '',
                 'skuName': d.get('SkuName', ''),
                 'productName': d.get('ProductName', ''),
                 'brandName': d.get('BrandName', ''),
+                'categoryId': category_id,
+                'categoryName': category_name,
+                'ean': d.get('Ean', ''),
                 'isActive': d.get('IsActive', False),
                 'availableQuantity': stock_data.get(sku_id, 0),
                 'price': price_data.get(sku_id, 0)
@@ -905,15 +941,41 @@ if st.session_state.paso_actual > 0:
         st.session_state.df_productos = df
         st.session_state.paso_actual = 0
         
+        # Guardar metadata
+        st.session_state.productos_data = {
+            'total_skus': len(df),
+            'total_activos': df['isActive'].sum(),
+            'total_con_stock': (df['availableQuantity'] > 0).sum(),
+            'total_con_precio': (df['price'] > 0).sum()
+        }
+        
         st.success("🎉 EXTRACCIÓN COMPLETADA")
         
         # Mostrar resultados
         col1, col2, col3, col4 = st.columns(4)
         col1.metric("Total SKUs", len(df))
-        col2.metric("Activos", df['isActive'].sum())
-        col3.metric("Con Stock", (df['availableQuantity'] > 0).sum())
-        col4.metric("Con Precio", (df['price'] > 0).sum())
+        col2.metric("Activos", int(df['isActive'].sum()))
+        col3.metric("Con Stock", int((df['availableQuantity'] > 0).sum()))
+        col4.metric("Con Precio", int((df['price'] > 0).sum()))
         
+        # Análisis adicional
+        with st.expander("📊 Análisis Detallado"):
+            col1, col2 = st.columns(2)
+            with col1:
+                st.markdown("**Stock**")
+                total_stock = df['availableQuantity'].sum()
+                avg_stock = df[df['availableQuantity'] > 0]['availableQuantity'].mean()
+                st.metric("Stock Total", f"{total_stock:,.0f}")
+                st.metric("Stock Promedio", f"{avg_stock:,.1f}" if not pd.isna(avg_stock) else "0")
+            
+            with col2:
+                st.markdown("**Precios**")
+                avg_price = df[df['price'] > 0]['price'].mean()
+                max_price = df['price'].max()
+                st.metric("Precio Promedio", f"${avg_price:,.2f}" if not pd.isna(avg_price) else "$0.00")
+                st.metric("Precio Máximo", f"${max_price:,.2f}" if not pd.isna(max_price) else "$0.00")
+        
+        st.markdown("#### 👀 Muestra de productos")
         st.dataframe(df.head(20), use_container_width=True)
         
         # Descargar
@@ -923,18 +985,41 @@ if st.session_state.paso_actual > 0:
             csv,
             f"productos_vtex_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
             "text/csv",
-            use_container_width=True
+            use_container_width=True,
+            key="btn_download_productos"
         )
         
     except Exception as e:
-        st.error(f"❌ Error: {e}")
-        st.info("💡 Usa 'CONTINUAR DESDE CACHÉ' para reanudar")
+        st.error(f"❌ Error durante la extracción: {str(e)}")
+        st.info("💡 Usa 'CONTINUAR DESDE CACHÉ' para reanudar desde el último punto guardado")
+        import traceback
+        with st.expander("🔍 Ver detalle técnico del error"):
+            st.code(traceback.format_exc())
 
-# Mostrar estado del caché
-if os.path.exists(CACHE_DIR):
-    archivos = os.listdir(CACHE_DIR)
-    if archivos:
-        st.info(f"💾 Archivos en caché: {', '.join(archivos)}")
+# Mostrar resultados persistidos
+elif st.session_state.df_productos is not None:
+    st.info("📋 Mostrando resultados de extracción anterior")
+    
+    data = st.session_state.productos_data
+    df = st.session_state.df_productos
+    
+    col1, col2, col3, col4 = st.columns(4)
+    col1.metric("Total SKUs", data['total_skus'])
+    col2.metric("Activos", data['total_activos'])
+    col3.metric("Con Stock", data['total_con_stock'])
+    col4.metric("Con Precio", data['total_con_precio'])
+    
+    st.dataframe(df.head(20), use_container_width=True)
+    
+    csv = df.to_csv(index=False, encoding='utf-8')
+    st.download_button(
+        "📥 DESCARGAR CSV",
+        csv,
+        f"productos_vtex_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+        "text/csv",
+        use_container_width=True,
+        key="btn_download_productos_cached"
+    )
 
 # ---------------------------------------------------------------------------------
 # CUARTO BLOQUE: EXTRACCIÓN DE VENTAS (MEJORADO Y CORREGIDO)
