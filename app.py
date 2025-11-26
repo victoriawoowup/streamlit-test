@@ -499,120 +499,43 @@ if st.session_state.df_clientes is not None:
     )
 
 # ---------------------------------------------------------------------------------
-# BLOQUE 3 - EXTRACCIÓN DE PRODUCTOS VTEX - VERSIÓN CORREGIDA (NO RESETEA LA APP)
+# TERCER BLOQUE: EXTRACCIÓN DE PRODUCTOS
 # ---------------------------------------------------------------------------------
-
-
-import streamlit as st
-import requests
-import pandas as pd
-import time
-import json
-import os
-from datetime import datetime
-from concurrent.futures import ThreadPoolExecutor, as_completed
-import threading
-from queue import Queue
-
 st.markdown("---")
-st.header("📦 Extracción de Productos VTEX")
+st.markdown("---")
+st.header("📦 Extracción de Productos")
 
-import os
-st.write("Directorio actual:", os.getcwd())
-st.write("Carpeta donde Streamlit crearía el cache:", os.path.abspath("vtex_cache"))
-
-# Inicializar session state
+# Inicializar session state para productos
 if 'productos_data' not in st.session_state:
     st.session_state.productos_data = None
 if 'df_productos' not in st.session_state:
     st.session_state.df_productos = None
 if 'df_atributos' not in st.session_state:
     st.session_state.df_atributos = None
-if 'paso_actual' not in st.session_state:
-    st.session_state.paso_actual = 0
-if 'extraccion_finalizada' not in st.session_state:
-    st.session_state.extraccion_finalizada = False
-if 'mostrar_descarga' not in st.session_state:
-    st.session_state.mostrar_descarga = False
 
-# Configuración
 st.markdown("### ⚙️ Configuración de Extracción")
 
-with st.expander("⚙️ Configuración Avanzada"):
-    max_workers = st.slider("Requests concurrentes", 5, 50, 20, key="workers_productos")
-    page_size = st.number_input("SKUs por página", 100, 1000, 1000, key="pagesize_productos")
-    delay_between_pages = st.slider("Delay entre páginas (seg)", 0.0, 1.0, 0.1, 0.1, key="delay_productos")
-    lote_guardado = st.number_input("Guardar progreso cada N SKUs", 500, 5000, 1000,
-                                    help="Cada cuántos SKUs se guarda el progreso en disco",
-                                    key="lote_productos")
+# Configuración fija para productos
+productos_por_pagina = 50
 
-# ================================================================================
-# FUNCIONES DE GUARDADO/CARGA DE PROGRESO
-# ================================================================================
-CACHE_DIR = "vtex_cache"
-
-def crear_cache_dir():
-    if not os.path.exists(CACHE_DIR):
-        os.makedirs(CACHE_DIR)
-
-def guardar_progreso_productos(paso, datos, nombre_archivo):
-    """Guarda progreso en archivo JSON"""
-    crear_cache_dir()
-    ruta = os.path.join(CACHE_DIR, nombre_archivo)
-    with open(ruta, 'w', encoding='utf-8') as f:
-        json.dump(datos, f, ensure_ascii=False, indent=2)
-    return ruta
-
-def cargar_progreso_productos(nombre_archivo):
-    """Carga progreso desde archivo JSON"""
-    ruta = os.path.join(CACHE_DIR, nombre_archivo)
-    if os.path.exists(ruta):
-        with open(ruta, 'r', encoding='utf-8') as f:
-            return json.load(f)
-    return None
-
-def limpiar_cache_productos():
-    """Limpia archivos de caché"""
-    if os.path.exists(CACHE_DIR):
-        for archivo in os.listdir(CACHE_DIR):
-            os.remove(os.path.join(CACHE_DIR, archivo))
-        st.success("🗑️ Caché limpiado")
-
-# Rate limiting
-rate_limit_lock = threading.Lock()
-last_request_times = Queue(maxsize=10)
-
-def rate_limited_request():
-    with rate_limit_lock:
-        current_time = time.time()
-        if last_request_times.full():
-            oldest = last_request_times.get()
-            diff = current_time - oldest
-            if diff < 1.0:
-                time.sleep(1.0 - diff)
-            current_time = time.time()
-        last_request_times.put(current_time)
-
-# ================================================================================
-# PASO 0: CATEGORÍAS
-# ================================================================================
-def obtener_categorias_productos():
-    st.info("🔄 Obteniendo categorías...")
+if st.button("📥 Extraer Productos", type="primary", use_container_width=True):
+    validar_credenciales()
     
-    cache = cargar_progreso_productos("categorias.json")
-    if cache:
-        st.success(f"✅ {len(cache)} categorías (desde caché)")
-        return cache
+    st.info("🔄 Paso 1/3: Obteniendo árbol de categorías...")
     
+    # Headers para productos
+    headers_productos = get_vtex_headers()
+    headers_productos['Accept'] = 'application/vnd.vtex.ds.v10+json'
+    headers_productos['REST-Range'] = 'resources=0-10'
+    
+    # ===== FETCH CATEGORÍAS =====
     category_map = {}
-    headers = get_vtex_headers()
-    headers['Accept'] = 'application/vnd.vtex.ds.v10+json'
-    url = f'https://{ACCOUNT_NAME}.vtexcommercestable.com.br/api/catalog_system/pub/category/tree/10'
+    url_categorias = f'https://{ACCOUNT_NAME}.vtexcommercestable.com.br/api/catalog_system/pub/category/tree/10'
     
     try:
-        resp = requests.get(url, headers=headers, timeout=30)
-        if resp.status_code == 200:
-            tree = resp.json()
+        resp_cat = requests.get(url_categorias, headers=headers_productos, timeout=30)
+        if resp_cat.status_code == 200:
+            tree = resp_cat.json()
             
             def extract_categories(nodes, parent_path=""):
                 for node in nodes:
@@ -621,553 +544,223 @@ def obtener_categorias_productos():
                     full_path = f"{parent_path} > {cat_name}" if parent_path else cat_name
                     if cat_id:
                         category_map[cat_id] = full_path
-                    if node.get('children'):
-                        extract_categories(node['children'], full_path)
+                    children = node.get('children', [])
+                    if children:
+                        extract_categories(children, full_path)
             
             extract_categories(tree)
-            guardar_progreso_productos(0, category_map, "categorias.json")
-            st.success(f"✅ {len(category_map)} categorías")
+            st.success(f"✅ {len(category_map)} categorías cargadas")
         else:
-            st.warning(f"⚠️ Error categorías: Status {resp.status_code}")
+            st.warning("⚠️ No se pudieron cargar categorías")
     except Exception as e:
-        st.error(f"❌ Error: {e}")
+        st.error(f"❌ Error cargando categorías: {e}")
     
-    return category_map
-
-# ================================================================================
-# PASO 1: LISTAR SKU IDs
-# ================================================================================
-def listar_sku_ids_productos():
-    st.info("🔄 PASO 1/4: Listando SKU IDs...")
+    time.sleep(0.3)
     
-    cache = cargar_progreso_productos("sku_ids.json")
-    if cache:
-        st.success(f"✅ {len(cache)} SKU IDs (desde caché)")
-        return cache
+    # ===== FETCH PRODUCTOS =====
+    st.info("🔄 Paso 2/3: Extrayendo productos...")
     
-    headers = get_vtex_headers()
-    headers['Accept'] = 'application/json'
+    productos = []
+    from_index = 0
+    page_count = 0
     
-    all_ids = []
-    page = 1
-    status = st.empty()
+    progress_text_prod = st.empty()
+    info_text_prod = st.empty()
     
-    while True:
-        url = f'https://{ACCOUNT_NAME}.vtexcommercestable.com.br/api/catalog_system/pvt/sku/stockkeepingunitids'
-        params = {'page': page, 'pagesize': page_size}
-        
-        try:
-            resp = requests.get(url, headers=headers, params=params, timeout=30)
-            if resp.status_code != 200:
-                st.error(f"❌ Error en página {page}: {resp.status_code}")
-                break
+    with st.spinner('📦 Extrayendo productos de VTEX...'):
+        while True:
+            page_count += 1
+            to_index = from_index + productos_por_pagina - 1
             
-            ids = resp.json()
-            if not ids:
-                break
+            url_productos = f'https://{ACCOUNT_NAME}.vtexcommercestable.com.br/api/catalog_system/pub/products/search?_from={from_index}&_to={to_index}'
             
-            all_ids.extend(ids)
-            status.text(f"📄 Página {page} | Total: {len(all_ids)} SKUs")
-            
-            if page % 10 == 0:
-                guardar_progreso_productos(1, all_ids, "sku_ids.json")
-                st.info(f"💾 Progreso guardado: {len(all_ids)} IDs")
-            
-            if len(ids) < page_size:
-                break
-            
-            page += 1
-            time.sleep(delay_between_pages)
-            
-        except Exception as e:
-            st.error(f"❌ Error: {e}")
-            break
-    
-    guardar_progreso_productos(1, all_ids, "sku_ids.json")
-    st.success(f"✅ PASO 1 COMPLETADO: {len(all_ids)} SKU IDs")
-    return all_ids
-
-# ================================================================================
-# PASO 2: OBTENER DETALLES
-# ================================================================================
-def obtener_detalles_productos(sku_ids):
-    st.info(f"🔄 PASO 2/4: Obteniendo detalles de {len(sku_ids)} SKUs...")
-    
-    cache = cargar_progreso_productos("sku_details.json")
-    if cache:
-        st.success(f"✅ {len(cache)} detalles (desde caché)")
-        return cache
-    
-    detalles = []
-    errores = 0
-    
-    progress = st.progress(0)
-    status = st.empty()
-    
-    def fetch_detail(sku_id):
-        rate_limited_request()
-        url = f"https://{ACCOUNT_NAME}.vtexcommercestable.com.br/api/catalog_system/pvt/sku/stockkeepingunitbyid/{sku_id}"
-        headers = get_vtex_headers()
-        headers['Accept'] = 'application/vnd.vtex.ds.v10+json'
-        
-        for attempt in range(3):
             try:
-                resp = requests.get(url, headers=headers, timeout=15)
-                if resp.status_code == 200:
-                    return resp.json()
-                elif resp.status_code == 429:
-                    time.sleep(2 ** attempt)
-            except:
-                if attempt < 2:
-                    time.sleep(1)
-        return None
+                resp_prod = requests.get(url_productos, headers=headers_productos, timeout=30)
+                
+                if resp_prod.status_code not in [200, 206]:
+                    st.error(f"❌ Error en página {page_count}: Status {resp_prod.status_code}")
+                    break
+                
+                products_page = resp_prod.json()
+                
+                if not products_page or len(products_page) == 0:
+                    info_text_prod.success("✅ No hay más productos para procesar")
+                    break
+                
+                productos.extend(products_page)
+                
+                progress_text_prod.text(f"📄 Página {page_count}")
+                info_text_prod.info(f"✅ {len(products_page)} productos en esta página | Total acumulado: {len(productos)}")
+                
+                # Si obtuvo menos productos que el límite, terminó
+                if len(products_page) < productos_por_pagina:
+                    info_text_prod.success("✅ Se procesaron todos los productos disponibles")
+                    break
+                
+                from_index = to_index + 1
+                time.sleep(0.5)
+                
+            except requests.exceptions.Timeout:
+                st.error(f"⏱️ Timeout en página {page_count}. Reintentando...")
+                time.sleep(2)
+                continue
+            except Exception as e:
+                st.error(f"❌ Excepción en página {page_count}: {str(e)}")
+                break
     
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        futures = {executor.submit(fetch_detail, sid): sid for sid in sku_ids}
+    # ===== PROCESAR Y EXPORTAR =====
+    if productos:
+        st.info("🔄 Paso 3/3: Procesando datos y generando CSVs...")
         
-        for i, future in enumerate(as_completed(futures), 1):
-            detail = future.result()
-            if detail:
-                detalles.append(detail)
-            else:
-                errores += 1
-            
-            progress.progress(i / len(sku_ids))
-            status.text(f"⏳ {i}/{len(sku_ids)} | ❌ {errores} errores")
-            
-            if i % lote_guardado == 0:
-                guardar_progreso_productos(2, detalles, "sku_details.json")
-                st.info(f"💾 Progreso guardado: {len(detalles)} detalles")
-    
-    guardar_progreso_productos(2, detalles, "sku_details.json")
-    st.success(f"✅ PASO 2 COMPLETADO: {len(detalles)} detalles | ❌ {errores} errores")
-    return detalles
-
-# ================================================================================
-# PASO 3: OBTENER STOCK
-# ================================================================================
-def obtener_stock_productos(detalles):
-    st.info(f"🔄 PASO 3/4: Obteniendo stock de {len(detalles)} SKUs...")
-    
-    cache = cargar_progreso_productos("stock_data.json")
-    if cache:
-        st.success(f"✅ Stock de {len(cache)} SKUs (desde caché)")
-        return cache
-    
-    stock_data = {}
-    
-    progress = st.progress(0)
-    status = st.empty()
-    
-    def fetch_stock(sku_id):
-        rate_limited_request()
-        url = f"https://{ACCOUNT_NAME}.vtexcommercestable.com.br/api/logistics/pvt/inventory/skus/{sku_id}"
-        headers = get_vtex_headers()
-        
-        for attempt in range(2):
-            try:
-                resp = requests.get(url, headers=headers, timeout=10)
-                if resp.status_code == 200:
-                    data = resp.json()
-                    total = sum(wh.get('totalQuantity', 0) for wh in data.get('balance', []))
-                    return {sku_id: total}
-            except:
-                pass
-        return {sku_id: 0}
-    
-    sku_ids = [d.get('Id') for d in detalles if d.get('Id')]
-    
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        futures = {executor.submit(fetch_stock, sid): sid for sid in sku_ids}
-        
-        for i, future in enumerate(as_completed(futures), 1):
-            stock = future.result()
-            stock_data.update(stock)
-            
-            progress.progress(i / len(sku_ids))
-            status.text(f"⏳ {i}/{len(sku_ids)}")
-            
-            if i % lote_guardado == 0:
-                guardar_progreso_productos(3, stock_data, "stock_data.json")
-                st.info(f"💾 Progreso guardado: {len(stock_data)} stocks")
-    
-    guardar_progreso_productos(3, stock_data, "stock_data.json")
-    st.success(f"✅ PASO 3 COMPLETADO: {len(stock_data)} stocks")
-    return stock_data
-
-# ================================================================================
-# PASO 4: OBTENER PRECIOS
-# ================================================================================
-def obtener_precios_productos(detalles):
-    st.info(f"🔄 PASO 4/4: Obteniendo precios de {len(detalles)} SKUs...")
-    
-    cache = cargar_progreso_productos("price_data.json")
-    if cache:
-        st.success(f"✅ Precios de {len(cache)} SKUs (desde caché)")
-        return cache
-    
-    price_data = {}
-    
-    progress = st.progress(0)
-    status = st.empty()
-    
-    def fetch_price(sku_id):
-        rate_limited_request()
-        url = f"https://{ACCOUNT_NAME}.vtexcommercestable.com.br/api/pricing/prices/{sku_id}"
-        headers = get_vtex_headers()
-        
-        for attempt in range(2):
-            try:
-                resp = requests.get(url, headers=headers, timeout=10)
-                if resp.status_code == 200:
-                    data = resp.json()
-                    price = data.get('basePrice') or data.get('listPrice') or data.get('costPrice') or 0
-                    return {sku_id: price}
-            except:
-                pass
-        return {sku_id: 0}
-    
-    sku_ids = [d.get('Id') for d in detalles if d.get('Id')]
-    
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        futures = {executor.submit(fetch_price, sid): sid for sid in sku_ids}
-        
-        for i, future in enumerate(as_completed(futures), 1):
-            price = future.result()
-            price_data.update(price)
-            
-            progress.progress(i / len(sku_ids))
-            status.text(f"⏳ {i}/{len(sku_ids)}")
-            
-            if i % lote_guardado == 0:
-                guardar_progreso_productos(4, price_data, "price_data.json")
-                st.info(f"💾 Progreso guardado: {len(price_data)} precios")
-    
-    guardar_progreso_productos(4, price_data, "price_data.json")
-    st.success(f"✅ PASO 4 COMPLETADO: {len(price_data)} precios")
-    return price_data
-
-# ================================================================================
-# INTERFAZ PRINCIPAL
-# ================================================================================
-
-st.markdown("### 🎮 Control de Extracción")
-
-col1, col2, col3 = st.columns(3)
-
-with col1:
-    if st.button("🚀 INICIAR EXTRACCIÓN", type="primary", use_container_width=True, key="btn_iniciar"):
-        validar_credenciales()
-        st.session_state.paso_actual = 1
-
-with col2:
-    if st.button("♻️ CONTINUAR DESDE CACHÉ", use_container_width=True, key="btn_continuar"):
-        validar_credenciales()
-        st.session_state.paso_actual = 2
-
-with col3:
-    if st.button("🗑️ LIMPIAR CACHÉ", use_container_width=True, key="btn_limpiar"):
-        limpiar_cache_productos()
-        st.session_state.paso_actual = 0
-        st.session_state.extraccion_finalizada = False
-        st.session_state.mostrar_descarga = False
-
-# Mostrar estado del caché
-if os.path.exists(CACHE_DIR):
-    archivos = os.listdir(CACHE_DIR)
-    if archivos:
-        with st.expander("💾 Estado del Caché"):
-            for archivo in archivos:
-                ruta = os.path.join(CACHE_DIR, archivo)
-                tamaño = os.path.getsize(ruta) / 1024  # KB
-                st.text(f"• {archivo}: {tamaño:.1f} KB")
-
-# Ejecutar extracción
-if st.session_state.paso_actual > 0:
-    try:
-        category_map = obtener_categorias_productos()
-        
-        sku_ids = listar_sku_ids_productos()
-        if not sku_ids:
-            st.error("❌ No se obtuvieron SKU IDs")
-            st.session_state.paso_actual = 0
-            st.stop()
-        
-        detalles = obtener_detalles_productos(sku_ids)
-        if not detalles:
-            st.error("❌ No se obtuvieron detalles de productos")
-            st.session_state.paso_actual = 0
-            st.stop()
-        
-        stock_data = obtener_stock_productos(detalles)
-        price_data = obtener_precios_productos(detalles)
-        
-        st.info("🔄 Generando DataFrame final con todos los datos...")
-        
-        # -----------------------------
-        # RECOLECTAR TODOS LOS ATRIBUTOS (allSpecifications)
-        # -----------------------------
+        # Extraer atributos de todos los productos
         all_attributes = set()
-        for d in detalles:
-            specs = d.get('allSpecifications') or d.get('AllSpecifications') or []
-            if isinstance(specs, list):
-                for s in specs:
-                    # normalizar nombres como string
-                    if isinstance(s, str) and s.strip():
-                        all_attributes.add(s.strip())
-        
-        # orden consistente
-        sorted_attrs = sorted(all_attributes)
-        
-        # Para armar df de productos (una fila por SKU) + columnas de atributos
-        rows = []
-        for d in detalles:
-            sku_id = d.get('Id')
-            product_id = d.get('ProductId')
-            
-            category_id = ''
-            category_name = ''
-            product_categories = d.get('ProductCategories', {})
-            if product_categories and isinstance(product_categories, dict):
-                cat_ids_list = list(product_categories.keys())
-                if cat_ids_list:
-                    category_id = cat_ids_list[-1]
-                    category_path_parts = []
-                    for cat_id_item in cat_ids_list:
-                        cat_name_item = product_categories.get(cat_id_item, '')
-                        if cat_name_item:
-                            category_path_parts.append(cat_name_item)
-                    if category_path_parts:
-                        category_name = " > ".join(category_path_parts)
-            
-            # descripción (asegurar string)
-            description = d.get('description') or d.get('Description') or d.get('metaTagDescription') or ''
-            if description is None:
-                description = ''
-            
-            # datos base por fila (orden solicitado)
-            base = {
-                'productId': product_id,
-                'productReference': d.get('ProductRefId', '') or d.get('productReference', ''),
-                'skuId': sku_id,
-                'refId': d.get('AlternateIds', {}).get('RefId', '') if isinstance(d.get('AlternateIds'), dict) else '',
-                'skuName': d.get('SkuName', '') or d.get('name', ''),
-                'productName': d.get('ProductName', '') or d.get('productName', ''),
-                'description': (description or "")[:10000],
-                'brand': d.get('BrandName', '') or d.get('brand', ''),
-                'categoryId': category_id,
-                'categoryName': category_name,
-                'availableQuantity': stock_data.get(sku_id, 0)
-            }
-            
-            # atributos: intentar varias formas de obtener el valor para cada attribute
-            attr_values = {}
-            for attr in sorted_attrs:
-                val = None
-                # 1) campo directo (ej: "Color": ["Rojo"])
-                if attr in d and d.get(attr) is not None:
-                    val = d.get(attr)
-                # 2) lowercase key
-                elif attr.lower() in d and d.get(attr.lower()) is not None:
-                    val = d.get(attr.lower())
-                # 3) dentro de 'specifications' o 'Specifications' si existiera
-                elif isinstance(d.get('specifications'), dict) and d.get('specifications').get(attr):
-                    val = d.get('specifications').get(attr)
-                elif isinstance(d.get('Specifications'), dict) and d.get('Specifications').get(attr):
-                    val = d.get('Specifications').get(attr)
-                # 4) fallback None
-                
-                # Normalizar a lista de strings
-                values_list = []
-                if val is None:
-                    values_list = []
-                elif isinstance(val, list):
-                    for v in val:
-                        if v is None:
-                            continue
-                        # si vienen como dicts con 'Name' o 'Value'
-                        if isinstance(v, dict):
-                            # intentar varias keys comunes
-                            v_val = v.get('Name') or v.get('Value') or v.get('value') or v.get('name') or str(v)
-                            values_list.append(str(v_val))
-                        else:
-                            values_list.append(str(v))
+        for producto in productos:
+            atributos = {}
+            all_specs = producto.get("allSpecifications", [])
+            for spec in all_specs:
+                valores = producto.get(spec, [])
+                if isinstance(valores, list):
+                    atributos[spec] = valores
                 else:
-                    # valor simple (string/número)
-                    values_list = [str(val)]
-                
-                # unir con coma+espacio (opción A)
-                attr_values[attr] = ", ".join([x for x in values_list if x and x.strip()]) if values_list else ""
+                    atributos[spec] = [valores]
             
-            # juntar base + atributos con prefijo 'atributo.'
-            row = dict(base)  # copia
-            for attr in sorted_attrs:
-                row[f"atributo.{attr}"] = attr_values.get(attr, "")
+            if producto.get("complementName"):
+                atributos["nombreComplementario"] = [producto.get("complementName")]
+            if producto.get("productClusters"):
+                atributos["colecciones"] = list(producto["productClusters"].values())
             
-            # incluir price como columna adicional si la querés (no requerida en la lista, pero puede quedar)
-            row['price'] = price_data.get(sku_id, 0)
-            
-            rows.append(row)
+            producto["_atributos"] = atributos
+            all_attributes.update(atributos.keys())
         
-        # columnas base solicitadas + atributos dinámicos (en orden)
-        base_columns = [
-            'productId', 'productReference', 'skuId', 'refId', 'skuName', 'productName',
-            'description', 'brand', 'categoryId', 'categoryName', 'availableQuantity'
-        ]
-        atributo_columns = [f"atributo.{a}" for a in sorted_attrs]
-        final_columns = base_columns + atributo_columns + ['price']
+        # Generar CSV de productos
+        attr_headers = [f"atributo.{a}" for a in sorted(all_attributes)]
         
-        df = pd.DataFrame(rows, columns=final_columns)
-        st.session_state.df_productos = df
+        productos_rows = []
+        for producto in productos:
+            product_id = producto.get('productId', 'N/A')
+            product_name = producto.get('productName', 'N/A')
+            product_reference = producto.get('productReference', 'N/A')
+            brand = producto.get('brand', 'N/A')
+            category_id = producto.get('categoryId', 'N/A')
+            # Asegurar que la descripción siempre sea string
+            description = producto.get('description') or producto.get('metaTagDescription') or ''
+            category_name = category_map.get(int(category_id), 'N/A') if category_id != 'N/A' else 'N/A'
 
-        # -----------------------------
-        # GENERAR CSV DE ATRIBUTOS (atributo, valores_ejemplo)
-        # -----------------------------
-        atributos_info = []
-        # recolectar valores únicos por atributo
-        valores_por_attr = {a: set() for a in sorted_attrs}
-        for d in detalles:
-            for a in sorted_attrs:
-                # intentar obtener valores de la misma forma que arriba
-                val = None
-                if a in d and d.get(a) is not None:
-                    val = d.get(a)
-                elif a.lower() in d and d.get(a.lower()) is not None:
-                    val = d.get(a.lower())
-                elif isinstance(d.get('specifications'), dict) and d.get('specifications').get(a):
-                    val = d.get('specifications').get(a)
-                elif isinstance(d.get('Specifications'), dict) and d.get('Specifications').get(a):
-                    val = d.get('Specifications').get(a)
+            atributos = producto.get("_atributos", {})
+            
+            # Procesar SKUs
+            items = producto.get('items', [])
+            if not items:
+                attr_values = []
+                for a in sorted(all_attributes):
+                    val = atributos.get(a, [])
+                    if isinstance(val, list):
+                        attr_values.append(", ".join(str(v) for v in val))
+                    else:
+                        attr_values.append(str(val))
                 
-                if val is None:
-                    continue
-                if isinstance(val, list):
-                    for v in val:
-                        if v is None:
-                            continue
-                        if isinstance(v, dict):
-                            v_val = v.get('Name') or v.get('Value') or v.get('value') or v.get('name') or str(v)
-                            valores_por_attr[a].add(str(v_val))
+                productos_rows.append([
+                    product_id, product_reference, 'N/A', 'N/A', product_name,
+                    (description or "")[:500], brand, category_id, category_name, 0
+                ] + attr_values)
+            else:
+                for item in items:
+                    sku_id = item.get('itemId', 'N/A')
+                    sku_name = item.get('name', 'N/A')
+                    available_qty = 0
+                    
+                    for seller in item.get('sellers', []):
+                        offer = seller.get('commertialOffer', {}) or seller.get('commercialOffer', {})
+                        qty = offer.get('AvailableQuantity', 0)
+                        if isinstance(qty, (int, float)):
+                            available_qty += qty
+                    
+                    attr_values = []
+                    for a in sorted(all_attributes):
+                        val = atributos.get(a, [])
+                        if isinstance(val, list):
+                            attr_values.append(", ".join(str(v) for v in val))
                         else:
-                            valores_por_attr[a].add(str(v))
-                else:
-                    valores_por_attr[a].add(str(val))
+                            attr_values.append(str(val))
+                    
+                    productos_rows.append([
+                        product_id, product_reference, sku_id, sku_name, product_name,
+                        (description or "")[:500], brand, category_id, category_name, available_qty
+                    ] + attr_values)
         
-        for a in sorted_attrs:
-            ejemplos = sorted(list(valores_por_attr.get(a, set())))[:200]  # limitar ejemplos
+        # Crear DataFrames y guardar en session_state
+        st.session_state.df_productos = pd.DataFrame(
+            productos_rows,
+            columns=['productId','productReference','skuId','skuName','productName',
+                    'description','brand','categoryId','categoryName','availableQuantity'] + attr_headers
+        )
+        
+        # Crear DataFrame de atributos
+        atributos_info = []
+        for a in sorted(all_attributes):
+            valores = set()
+            for p in productos:
+                vals = p.get("_atributos", {}).get(a, [])
+                if vals:
+                    valores.update(str(v) for v in vals)
             atributos_info.append({
-                'atributo': f"atributo.{a}",
-                'valores_ejemplo': ", ".join(ejemplos)
+                "atributo": f"atributo.{a}",
+                "valores_ejemplo": ", ".join(list(valores)[:10])
             })
         
-        df_atributos = pd.DataFrame(atributos_info)
-        st.session_state.df_atributos = df_atributos
-        
-        # 🔥 CORRECCIÓN: NO reiniciar flujo, no perder el botón
-        st.session_state.paso_actual = 99
-        st.session_state.extraccion_finalizada = True
-        st.session_state.mostrar_descarga = True
-        
+        st.session_state.df_atributos = pd.DataFrame(atributos_info)
         st.session_state.productos_data = {
-            'total_skus': len(df),
-            'total_activos': df.shape[0],  # si no tenés isActive, usar total filas
-            'total_con_stock': (df['availableQuantity'] > 0).sum(),
-            'total_con_precio': (df['price'] > 0).sum()
+            'total_productos': len(productos),
+            'total_skus': len(productos_rows),
+            'total_atributos': len(all_attributes)
         }
-        
-        st.success("🎉 EXTRACCIÓN COMPLETADA")
-        
-        col1, col2, col3, col4 = st.columns(4)
-        col1.metric("Total SKUs", len(df))
-        # si tenés isActive podrías calcular mejor
-        col2.metric("Activos (filas)", int(st.session_state.productos_data['total_activos']))
-        col3.metric("Con Stock", int((df['availableQuantity'] > 0).sum()))
-        col4.metric("Con Precio", int((df['price'] > 0).sum()))
-        
-        with st.expander("📊 Análisis Detallado"):
-            col1, col2 = st.columns(2)
-            with col1:
-                st.markdown("**Stock**")
-                total_stock = df['availableQuantity'].sum()
-                avg_stock = df[df['availableQuantity'] > 0]['availableQuantity'].mean()
-                st.metric("Stock Total", f"{total_stock:,.0f}")
-                st.metric("Promedio Stock", f"{avg_stock:,.1f}" if not pd.isna(avg_stock) else "0")
-            
-            with col2:
-                st.markdown("**Precios**")
-                avg_price = df[df['price'] > 0]['price'].mean()
-                max_price = df['price'].max()
-                st.metric("Precio Promedio", f"${avg_price:,.2f}" if not pd.isna(avg_price) else "$0.00")
-                st.metric("Precio Máximo", f"${max_price:,.2f}" if not pd.isna(max_price) else "$0.00")
-        
-        st.markdown("#### 👀 Muestra de productos (primeras 20 filas)")
-        st.dataframe(df.head(20), use_container_width=True)
-        
-        # Descargas: productos + atributos
-        if st.session_state.mostrar_descarga:
-            csv = df.to_csv(index=False, encoding='utf-8')
-            st.download_button(
-                "📥 DESCARGAR CSV COMPLETO (Productos x SKU)",
-                csv,
-                f"productos_vtex_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
-                "text/csv",
-                use_container_width=True,
-                key="btn_download_productos"
-            )
-            # CSV atributos separado
-            csv_attr = df_atributos.to_csv(index=False, encoding='utf-8')
-            st.download_button(
-                "📥 DESCARGAR CSV DE ATRIBUTOS",
-                csv_attr,
-                f"atributos_vtex_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
-                "text/csv",
-                use_container_width=True,
-                key="btn_download_atributos"
-            )
-        
-    except Exception as e:
-        st.error(f"❌ Error durante la extracción: {str(e)}")
-        st.info("💡 Usa 'CONTINUAR DESDE CACHÉ' para reanudar desde el último punto guardado")
-        import traceback
-        with st.expander("🔍 Ver detalle técnico del error"):
-            st.code(traceback.format_exc())
 
-# Mostrar resultados anteriores cuando ya terminó
-elif st.session_state.df_productos is not None:
-    st.info("📋 Mostrando resultados de extracción anterior")
-    
+# Mostrar resultados si existen datos en session_state
+if st.session_state.df_productos is not None:
     data = st.session_state.productos_data
-    df = st.session_state.df_productos
+    df_productos = st.session_state.df_productos
     df_atributos = st.session_state.df_atributos
     
-    col1, col2, col3, col4 = st.columns(4)
-    col1.metric("Total SKUs", data['total_skus'])
-    col2.metric("Activos", data.get('total_activos', 0))
-    col3.metric("Con Stock", data.get('total_con_stock', 0))
-    col4.metric("Con Precio", data.get('total_con_precio', 0))
+    st.success(f"🎉 Extracción completada: {data['total_productos']} productos | {data['total_skus']} SKUs")
     
-    st.dataframe(df.head(20), use_container_width=True)
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.metric("Total Productos", data['total_productos'])
+    with col2:
+        st.metric("Total SKUs", data['total_skus'])
+    with col3:
+        st.metric("Atributos", data['total_atributos'])
     
-    if st.session_state.mostrar_descarga:
-        csv = df.to_csv(index=False, encoding='utf-8')
+    # Mostrar muestra de productos
+    st.markdown("#### 👀 Muestra de los primeros 5 productos")
+    st.dataframe(df_productos.head(5), use_container_width=True)
+    
+    # Mostrar muestra de atributos
+    st.markdown("#### 🏷️ Muestra de atributos disponibles")
+    st.dataframe(df_atributos.head(10), use_container_width=True)
+    
+    # Descargas - AHORA PERSISTEN
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        csv_productos = df_productos.to_csv(index=False, encoding='utf-8')
         st.download_button(
-            "📥 DESCARGAR CSV",
-            csv,
-            f"productos_vtex_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
-            "text/csv",
-            use_container_width=True,
-            key="btn_download_productos_cached"
+            label="📥 Descargar CSV de Productos",
+            data=csv_productos,
+            file_name=f"productos_vtex_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+            mime="text/csv",
+            use_container_width=True
         )
-        if df_atributos is not None:
-            csv_attr = df_atributos.to_csv(index=False, encoding='utf-8')
-            st.download_button(
-                "📥 DESCARGAR CSV DE ATRIBUTOS",
-                csv_attr,
-                f"atributos_vtex_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
-                "text/csv",
-                use_container_width=True,
-                key="btn_download_atributos_cached"
-            )
+    
+    with col2:
+        csv_atributos = df_atributos.to_csv(index=False, encoding='utf-8')
+        st.download_button(
+            label="📥 Descargar CSV de Atributos",
+            data=csv_atributos,
+            file_name=f"atributos_vtex_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+            mime="text/csv",
+            use_container_width=True
+        )
 
 # ---------------------------------------------------------------------------------
 # CUARTO BLOQUE: EXTRACCIÓN DE VENTAS (MEJORADO Y CORREGIDO)
